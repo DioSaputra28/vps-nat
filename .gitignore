@@ -1,0 +1,33 @@
+# Local environment
+.env
+
+# Product docs kept local
+PRD.md
+
+# Go build outputs
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Logs and temp files
+*.log
+.tmp/
+tmp/
+
+# Editor / IDE
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
