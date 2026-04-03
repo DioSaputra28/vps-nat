@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/DioSaputra28/vps-nat/internal/http/response"
 	"github.com/DioSaputra28/vps-nat/internal/model"
 	"github.com/DioSaputra28/vps-nat/internal/packages"
 	"github.com/gin-gonic/gin"
@@ -57,7 +58,7 @@ func NewPackageHandler(service *packages.Service) PackageHandler {
 func (h PackageHandler) Create(c *gin.Context) {
 	var req createPackageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid request body"})
+		response.Fail(c, http.StatusBadRequest, "invalid request body", "bad_request", nil)
 		return
 	}
 
@@ -76,10 +77,7 @@ func (h PackageHandler) Create(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"message": "package created successfully",
-		"data":    toPackageResponse(pkg),
-	})
+	response.Success(c, http.StatusCreated, "package created successfully", toPackageResponse(pkg))
 }
 
 func (h PackageHandler) List(c *gin.Context) {
@@ -88,7 +86,7 @@ func (h PackageHandler) List(c *gin.Context) {
 	if raw != "" {
 		value, err := strconv.ParseBool(raw)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "is_active must be a boolean"})
+			response.Fail(c, http.StatusBadRequest, "is_active must be a boolean", "bad_request", nil)
 			return
 		}
 
@@ -97,11 +95,11 @@ func (h PackageHandler) List(c *gin.Context) {
 
 	items, err := h.service.List(c.Request.Context(), isActive)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to list packages"})
+		response.Fail(c, http.StatusInternalServerError, "failed to list packages", "internal_server_error", nil)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": toPackageResponses(items)})
+	response.Success(c, http.StatusOK, "packages fetched successfully", toPackageResponses(items))
 }
 
 func (h PackageHandler) GetByID(c *gin.Context) {
@@ -111,13 +109,13 @@ func (h PackageHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": toPackageResponse(pkg)})
+	response.Success(c, http.StatusOK, "package fetched successfully", toPackageResponse(pkg))
 }
 
 func (h PackageHandler) Update(c *gin.Context) {
 	var req updatePackageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid request body"})
+		response.Fail(c, http.StatusBadRequest, "invalid request body", "bad_request", nil)
 		return
 	}
 
@@ -136,10 +134,7 @@ func (h PackageHandler) Update(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "package updated successfully",
-		"data":    toPackageResponse(pkg),
-	})
+	response.Success(c, http.StatusOK, "package updated successfully", toPackageResponse(pkg))
 }
 
 func (h PackageHandler) Delete(c *gin.Context) {
@@ -149,20 +144,17 @@ func (h PackageHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "package deactivated successfully",
-		"data":    toPackageResponse(pkg),
-	})
+	response.Success(c, http.StatusOK, "package deactivated successfully", toPackageResponse(pkg))
 }
 
 func handlePackageError(c *gin.Context, err error, fallback string) {
 	switch {
 	case errors.Is(err, packages.ErrPackageNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"message": "package not found"})
+		response.Fail(c, http.StatusNotFound, "package not found", "not_found", nil)
 	case errors.Is(err, packages.ErrInvalidPackageInput):
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		response.Fail(c, http.StatusBadRequest, err.Error(), "bad_request", nil)
 	default:
-		c.JSON(http.StatusInternalServerError, gin.H{"message": fallback})
+		response.Fail(c, http.StatusInternalServerError, fallback, "internal_server_error", nil)
 	}
 }
 

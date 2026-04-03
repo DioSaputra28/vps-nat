@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/DioSaputra28/vps-nat/internal/config"
+	"github.com/DioSaputra28/vps-nat/internal/http/response"
 	incusclient "github.com/DioSaputra28/vps-nat/internal/incus"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -30,7 +31,7 @@ func (h HealthHandler) Get(c *gin.Context) {
 		dbStatus = "disconnected"
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	response.Success(c, http.StatusOK, "health check successful", gin.H{
 		"status":    "ok",
 		"service":   h.config.App.Name,
 		"env":       h.config.App.Env,

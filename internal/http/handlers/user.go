@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/DioSaputra28/vps-nat/internal/http/response"
 	"github.com/DioSaputra28/vps-nat/internal/model"
 	"github.com/DioSaputra28/vps-nat/internal/users"
 	"github.com/gin-gonic/gin"
@@ -39,13 +40,13 @@ func NewUserHandler(service *users.Service) UserHandler {
 func (h UserHandler) List(c *gin.Context) {
 	page, err := parsePositiveInt(c.Query("page"), 1)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "page must be a positive integer"})
+		response.Fail(c, http.StatusBadRequest, "page must be a positive integer", "bad_request", nil)
 		return
 	}
 
 	limit, err := parsePositiveInt(c.Query("limit"), 10)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "limit must be a positive integer"})
+		response.Fail(c, http.StatusBadRequest, "limit must be a positive integer", "bad_request", nil)
 		return
 	}
 
@@ -59,8 +60,8 @@ func (h UserHandler) List(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"data": toUserResponses(result.Items),
+	response.Success(c, http.StatusOK, "users fetched successfully", gin.H{
+		"items": toUserResponses(result.Items),
 		"meta": gin.H{
 			"page":        result.Page,
 			"limit":       result.Limit,
@@ -78,17 +79,17 @@ func (h UserHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": toUserResponse(user)})
+	response.Success(c, http.StatusOK, "user fetched successfully", toUserResponse(user))
 }
 
 func handleUserError(c *gin.Context, err error, fallback string) {
 	switch {
 	case errors.Is(err, users.ErrUserNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"message": "user not found"})
+		response.Fail(c, http.StatusNotFound, "user not found", "not_found", nil)
 	case errors.Is(err, users.ErrInvalidPagination):
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		response.Fail(c, http.StatusBadRequest, err.Error(), "bad_request", nil)
 	default:
-		c.JSON(http.StatusInternalServerError, gin.H{"message": fallback})
+		response.Fail(c, http.StatusInternalServerError, fallback, "internal_server_error", nil)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/DioSaputra28/vps-nat/internal/auth"
+	"github.com/DioSaputra28/vps-nat/internal/http/response"
 	"github.com/DioSaputra28/vps-nat/internal/model"
 	"github.com/gin-gonic/gin"
 )
@@ -24,19 +25,20 @@ func (m AdminAuth) Require() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token, ok := bearerToken(c.GetHeader("Authorization"))
 		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"message": "missing or invalid authorization header"})
+			response.Fail(c, http.StatusUnauthorized, "missing or invalid authorization header", "unauthorized", nil)
+			c.Abort()
 			return
 		}
 
 		admin, _, err := m.authService.Authenticate(token)
 		if err != nil {
-			status := http.StatusUnauthorized
 			message := "unauthorized"
 			if errors.Is(err, auth.ErrSessionExpired) {
 				message = "session expired"
 			}
 
-			c.AbortWithStatusJSON(status, gin.H{"message": message})
+			response.Fail(c, http.StatusUnauthorized, message, "unauthorized", nil)
+			c.Abort()
 			return
 		}
 
