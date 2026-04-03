@@ -7,6 +7,7 @@ import (
 	"github.com/DioSaputra28/vps-nat/internal/http/middleware"
 	incusclient "github.com/DioSaputra28/vps-nat/internal/incus"
 	"github.com/DioSaputra28/vps-nat/internal/packages"
+	"github.com/DioSaputra28/vps-nat/internal/users"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -29,6 +30,9 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	packageRepository := packages.NewRepository(deps.DB)
 	packageService := packages.NewService(packageRepository)
 	packageHandler := handlers.NewPackageHandler(packageService)
+	userRepository := users.NewRepository(deps.DB)
+	userService := users.NewService(userRepository)
+	userHandler := handlers.NewUserHandler(userService)
 
 	router.GET("/healthz", healthHandler.Get)
 	router.GET("/health", healthHandler.Get)
@@ -48,6 +52,11 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	packageRoutes.GET("/:id", packageHandler.GetByID)
 	packageRoutes.PATCH("/:id", packageHandler.Update)
 	packageRoutes.DELETE("/:id", packageHandler.Delete)
+
+	userRoutes := router.Group("/users")
+	userRoutes.Use(adminAuthMiddleware.Require())
+	userRoutes.GET("", userHandler.List)
+	userRoutes.GET("/:id", userHandler.GetByID)
 
 	return router
 }
