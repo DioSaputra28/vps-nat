@@ -3,6 +3,7 @@ package router
 import (
 	"github.com/DioSaputra28/vps-nat/internal/auth"
 	"github.com/DioSaputra28/vps-nat/internal/config"
+	"github.com/DioSaputra28/vps-nat/internal/containers"
 	"github.com/DioSaputra28/vps-nat/internal/http/handlers"
 	"github.com/DioSaputra28/vps-nat/internal/http/middleware"
 	incusclient "github.com/DioSaputra28/vps-nat/internal/incus"
@@ -33,6 +34,9 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	userRepository := users.NewRepository(deps.DB)
 	userService := users.NewService(userRepository)
 	userHandler := handlers.NewUserHandler(userService)
+	containerRepository := containers.NewRepository(deps.DB)
+	containerService := containers.NewService(containerRepository, deps.Incus)
+	containerHandler := handlers.NewContainerHandler(containerService)
 
 	router.GET("/healthz", healthHandler.Get)
 	router.GET("/health", healthHandler.Get)
@@ -57,6 +61,14 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	userRoutes.Use(adminAuthMiddleware.Require())
 	userRoutes.GET("", userHandler.List)
 	userRoutes.GET("/:id", userHandler.GetByID)
+
+	containerRoutes := router.Group("/containers")
+	containerRoutes.Use(adminAuthMiddleware.Require())
+	containerRoutes.GET("", containerHandler.List)
+	containerRoutes.GET("/:id", containerHandler.GetByID)
+	containerRoutes.POST("/:id/actions/start", containerHandler.Start)
+	containerRoutes.POST("/:id/actions/stop", containerHandler.Stop)
+	containerRoutes.POST("/:id/actions/suspend", containerHandler.Suspend)
 
 	return router
 }
