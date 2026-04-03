@@ -71,15 +71,18 @@ func (s *Service) Login(input LoginInput) (*LoginResult, error) {
 
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.cfg.SessionTTL)
+	userAgent := strings.TrimSpace(input.UserAgent)
 	session := model.AdminSession{
 		ID:          uuid.NewString(),
 		AdminUserID: admin.ID,
 		TokenHash:   tokenHash,
-		UserAgent:   strings.TrimSpace(input.UserAgent),
 		ExpiresAt:   expiresAt,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		LastUsedAt:  &now,
+	}
+	if userAgent != "" {
+		session.UserAgent = &userAgent
 	}
 
 	if input.IPAddress != "" {
@@ -127,7 +130,7 @@ func (s *Service) Authenticate(token string) (*model.AdminUser, *model.AdminSess
 		return nil, nil, ErrSessionExpired
 	}
 
-	if session.AdminUser.Status != "active" {
+	if session.AdminUser == nil || session.AdminUser.Status != "active" {
 		return nil, nil, ErrUnauthorized
 	}
 
@@ -141,7 +144,7 @@ func (s *Service) Authenticate(token string) (*model.AdminUser, *model.AdminSess
 	session.LastUsedAt = &now
 	session.UpdatedAt = now
 
-	return &session.AdminUser, &session, nil
+	return session.AdminUser, &session, nil
 }
 
 func (s *Service) Logout(token string) error {
