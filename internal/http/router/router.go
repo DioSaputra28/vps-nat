@@ -8,6 +8,7 @@ import (
 	"github.com/DioSaputra28/vps-nat/internal/http/middleware"
 	incusclient "github.com/DioSaputra28/vps-nat/internal/incus"
 	"github.com/DioSaputra28/vps-nat/internal/packages"
+	"github.com/DioSaputra28/vps-nat/internal/telegram"
 	"github.com/DioSaputra28/vps-nat/internal/users"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -34,12 +35,18 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	userRepository := users.NewRepository(deps.DB)
 	userService := users.NewService(userRepository)
 	userHandler := handlers.NewUserHandler(userService)
+	telegramRepository := telegram.NewRepository(deps.DB)
+	telegramService := telegram.NewService(telegramRepository)
+	telegramHandler := handlers.NewTelegramHandler(telegramService, cfg.Telegram.BotSecret)
 	containerRepository := containers.NewRepository(deps.DB)
 	containerService := containers.NewService(containerRepository, deps.Incus)
 	containerHandler := handlers.NewContainerHandler(containerService)
 
 	router.GET("/healthz", healthHandler.Get)
 	router.GET("/health", healthHandler.Get)
+
+	telegramRoutes := router.Group("/telegram")
+	telegramRoutes.POST("/start", telegramHandler.Start)
 
 	authRoutes := router.Group("/auth")
 	authRoutes.POST("/login", adminAuthHandler.Login)

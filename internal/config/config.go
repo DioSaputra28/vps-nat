@@ -15,6 +15,7 @@ type Config struct {
 	HTTP     HTTPConfig
 	Database DatabaseConfig
 	Auth     AuthConfig
+	Telegram TelegramConfig
 	Incus    IncusConfig
 }
 
@@ -30,6 +31,10 @@ type HTTPConfig struct {
 
 type AuthConfig struct {
 	SessionTTL time.Duration
+}
+
+type TelegramConfig struct {
+	BotSecret string
 }
 
 type DatabaseConfig struct {
@@ -74,6 +79,9 @@ func Load() (Config, error) {
 		},
 		Auth: AuthConfig{
 			SessionTTL: getEnvDuration("AUTH_ADMIN_SESSION_TTL", 24*time.Hour),
+		},
+		Telegram: TelegramConfig{
+			BotSecret: os.Getenv("TELEGRAM_BOT_SECRET"),
 		},
 		Database: DatabaseConfig{
 			URL:             os.Getenv("DATABASE_URL"),
