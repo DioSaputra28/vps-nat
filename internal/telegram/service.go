@@ -46,6 +46,16 @@ type HomeResult struct {
 	Platform         HomePlatform
 }
 
+type BuyVPSInput struct {
+	TelegramID int64
+}
+
+type BuyVPSResult struct {
+	User     HomeUser
+	Wallet   HomeWallet
+	Packages []HomePackage
+}
+
 type HomeUser struct {
 	ID               string    `json:"id"`
 	TelegramID       int64     `json:"telegram_id"`
@@ -193,6 +203,63 @@ func (s *Service) Home(ctx context.Context, input HomeInput) (*HomeResult, error
 		OperatingSystems: defaultOperatingSystems(),
 		Rules:            defaultRules(),
 		Platform:         defaultPlatform(),
+	}
+
+	if user.Wallet != nil {
+		result.Wallet = HomeWallet{
+			ID:        user.Wallet.ID,
+			Balance:   user.Wallet.Balance,
+			CreatedAt: user.Wallet.CreatedAt,
+			UpdatedAt: user.Wallet.UpdatedAt,
+		}
+	}
+
+	result.Packages = make([]HomePackage, 0, len(packages))
+	for i := range packages {
+		result.Packages = append(result.Packages, HomePackage{
+			ID:           packages[i].ID,
+			Name:         packages[i].Name,
+			Description:  packages[i].Description,
+			CPU:          packages[i].CPU,
+			RAMMB:        packages[i].RAMMB,
+			DiskGB:       packages[i].DiskGB,
+			Price:        packages[i].Price,
+			DurationDays: packages[i].DurationDays,
+		})
+	}
+
+	return result, nil
+}
+
+func (s *Service) BuyVPS(ctx context.Context, input BuyVPSInput) (*BuyVPSResult, error) {
+	if input.TelegramID <= 0 {
+		return nil, ErrInvalidTelegramUser
+	}
+
+	user, err := s.repo.FindUserByTelegramID(ctx, input.TelegramID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTelegramUserNotFound
+		}
+
+		return nil, err
+	}
+
+	packages, err := s.repo.FindActivePackages(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &BuyVPSResult{
+		User: HomeUser{
+			ID:               user.ID,
+			TelegramID:       user.TelegramID,
+			TelegramUsername: user.TelegramUsername,
+			DisplayName:      user.DisplayName,
+			Status:           user.Status,
+			CreatedAt:        user.CreatedAt,
+			UpdatedAt:        user.UpdatedAt,
+		},
 	}
 
 	if user.Wallet != nil {

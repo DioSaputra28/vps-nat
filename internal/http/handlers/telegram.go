@@ -28,6 +28,10 @@ type telegramHomeRequest struct {
 	TelegramID int64 `json:"telegram_id" binding:"required"`
 }
 
+type telegramBuyVPSRequest struct {
+	TelegramID int64 `json:"telegram_id" binding:"required"`
+}
+
 func NewTelegramHandler(service *telegram.Service, botSecret string) TelegramHandler {
 	return TelegramHandler{
 		service:   service,
@@ -121,6 +125,39 @@ func (h TelegramHandler) Home(c *gin.Context) {
 		"operating_systems": result.OperatingSystems,
 		"rules":             result.Rules,
 		"platform":          result.Platform,
+	})
+}
+
+func (h TelegramHandler) BuyVPS(c *gin.Context) {
+	if !h.authorize(c) {
+		return
+	}
+
+	var req telegramBuyVPSRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, http.StatusBadRequest, "invalid request body", "bad_request", nil)
+		return
+	}
+
+	result, err := h.service.BuyVPS(c.Request.Context(), telegram.BuyVPSInput{
+		TelegramID: req.TelegramID,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, telegram.ErrInvalidTelegramUser):
+			response.Fail(c, http.StatusBadRequest, "invalid telegram user data", "bad_request", nil)
+		case errors.Is(err, telegram.ErrTelegramUserNotFound):
+			response.Fail(c, http.StatusNotFound, "telegram user not found", "not_found", nil)
+		default:
+			response.Fail(c, http.StatusInternalServerError, "failed to fetch telegram buy vps data", "internal_server_error", nil)
+		}
+		return
+	}
+
+	response.Success(c, http.StatusOK, "telegram buy vps data fetched successfully", gin.H{
+		"user":     result.User,
+		"wallet":   result.Wallet,
+		"packages": result.Packages,
 	})
 }
 

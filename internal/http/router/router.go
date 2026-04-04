@@ -48,6 +48,7 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	telegramRoutes := router.Group("/telegram")
 	telegramRoutes.POST("/start", telegramHandler.Start)
 	telegramRoutes.POST("/home", telegramHandler.Home)
+	telegramRoutes.POST("/buy-vps", telegramHandler.BuyVPS)
 
 	authRoutes := router.Group("/auth")
 	authRoutes.POST("/login", adminAuthHandler.Login)
