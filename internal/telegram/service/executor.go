@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 )
 
 const DefaultSSHUsername = "root"
+const simplestreamsImagesServer = "https://images.linuxcontainers.org"
 
 type ActionExecutor interface {
 	ChangeState(instanceName string, action string) (string, error)
@@ -31,6 +33,12 @@ func (IncusUnavailableError) Error() string {
 
 type incusActionExecutor struct {
 	client *incus.Client
+}
+
+type instanceDeletionServer interface {
+	GetInstance(name string) (*api.Instance, string, error)
+	UpdateInstanceState(name string, state api.InstanceStatePut, etag string) (incusclient.Operation, error)
+	DeleteInstance(name string) (incusclient.Operation, error)
 }
 
 func NewActionExecutor(client *incus.Client) ActionExecutor {
@@ -64,12 +72,7 @@ func (e *incusActionExecutor) ChangePassword(instanceName string, password strin
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	command := []string{"sh", "-lc", fmt.Sprintf("echo %s:%s | chpasswd", shellQuote(DefaultSSHUsername), shellQuote(password))}
-	op, err := server.ExecInstance(instanceName, api.InstanceExecPost{
-		Command:      command,
-		Interactive:  false,
-		RecordOutput: true,
-	}, &incusclient.InstanceExecArgs{
+	op, err := server.ExecInstance(instanceName, passwordExecPost(password), &incusclient.InstanceExecArgs{
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
@@ -99,11 +102,13 @@ func (e *incusActionExecutor) Reinstall(instanceName string, imageAlias string) 
 		return "", err
 	}
 
+	source, err := instanceSourceFromImageAlias(imageAlias)
+	if err != nil {
+		return "", err
+	}
+
 	op, err := server.RebuildInstance(instanceName, api.InstanceRebuildPost{
-		Source: api.InstanceSource{
-			Type:  "image",
-			Alias: imageAlias,
-		},
+		Source: source,
 	})
 	if err != nil {
 		return "", err
@@ -157,15 +162,7 @@ func (e *incusActionExecutor) DeleteInstance(instanceName string) (string, error
 		return "", err
 	}
 
-	op, err := server.DeleteInstance(instanceName)
-	if err != nil {
-		return "", err
-	}
-	if err := op.Wait(); err != nil {
-		return "", err
-	}
-
-	return op.Get().ID, nil
+	return deleteInstanceWithStopIfNeeded(server, instanceName)
 }
 
 func (e *incusActionExecutor) server() (incusclient.InstanceServer, error) {
@@ -184,6 +181,78 @@ func randomPassword(length int) string {
 	return builder.String()
 }
 
+func passwordExecPost(password string) api.InstanceExecPost {
+	command := []string{"sh", "-lc", fmt.Sprintf("echo %s:%s | chpasswd", shellQuote(DefaultSSHUsername), shellQuote(password))}
+	return api.InstanceExecPost{
+		Command:      command,
+		Interactive:  false,
+		RecordOutput: false,
+	}
+}
+
+func instanceSourceFromImageAlias(imageAlias string) (api.InstanceSource, error) {
+	trimmed := strings.TrimSpace(imageAlias)
+	if trimmed == "" {
+		return api.InstanceSource{}, errors.New("image alias is required")
+	}
+
+	parts := strings.SplitN(trimmed, ":", 2)
+	if len(parts) == 1 {
+		return api.InstanceSource{
+			Type:  "image",
+			Alias: trimmed,
+		}, nil
+	}
+
+	remote := strings.TrimSpace(parts[0])
+	alias := strings.TrimSpace(parts[1])
+	if alias == "" {
+		return api.InstanceSource{}, fmt.Errorf("invalid image alias %q", imageAlias)
+	}
+
+	switch remote {
+	case "images":
+		return api.InstanceSource{
+			Type:     "image",
+			Alias:    alias,
+			Server:   simplestreamsImagesServer,
+			Protocol: "simplestreams",
+		}, nil
+	default:
+		return api.InstanceSource{}, fmt.Errorf("unsupported image remote %q", remote)
+	}
+}
+
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+func deleteInstanceWithStopIfNeeded(server instanceDeletionServer, instanceName string) (string, error) {
+	instance, _, err := server.GetInstance(instanceName)
+	if err != nil {
+		return "", err
+	}
+
+	if instance != nil && strings.EqualFold(instance.Status, "running") {
+		stopOp, err := server.UpdateInstanceState(instanceName, api.InstanceStatePut{
+			Action: "stop",
+			Force:  true,
+		}, "")
+		if err != nil {
+			return "", err
+		}
+		if err := stopOp.Wait(); err != nil {
+			return "", err
+		}
+	}
+
+	deleteOp, err := server.DeleteInstance(instanceName)
+	if err != nil {
+		return "", err
+	}
+	if err := deleteOp.Wait(); err != nil {
+		return "", err
+	}
+
+	return deleteOp.Get().ID, nil
 }

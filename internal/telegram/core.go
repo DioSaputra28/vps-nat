@@ -29,14 +29,24 @@ var (
 	ErrDomainAlreadyExists      = errors.New("domain already exists")
 	ErrServiceNotOperable       = errors.New("service is not operable")
 	ErrNoActiveSSHMapping       = errors.New("ssh mapping not found")
+	ErrPackageNotFound          = errors.New("package not found")
+	ErrHostnameAlreadyExists    = errors.New("hostname already exists")
+	ErrOrderNotFound            = errors.New("order not found")
+	ErrProvisioningFailed       = errors.New("provisioning failed")
+	ErrPaymentVerification      = errors.New("payment verification failed")
+	ErrActiveNodeNotFound       = errors.New("active node not found")
 )
 
 const actorTypeTelegramUser = "user"
+const actorTypeSystem = "system"
 
 type Service struct {
-	repo    *Repository
-	incus   *incus.Client
-	actions telegramservice.ActionExecutor
+	repo                *Repository
+	incus               *incus.Client
+	actions             telegramservice.ActionExecutor
+	purchaseProvisioner PurchaseProvisioner
+	paymentGateway      PaymentGateway
+	adminNotifier       AdminNotifier
 }
 
 type managedService struct {
@@ -49,10 +59,19 @@ type managedService struct {
 
 func NewService(repo *Repository, incusClient *incus.Client) *Service {
 	return &Service{
-		repo:    repo,
-		incus:   incusClient,
-		actions: telegramservice.NewActionExecutor(incusClient),
+		repo:                repo,
+		incus:               incusClient,
+		actions:             telegramservice.NewActionExecutor(incusClient),
+		purchaseProvisioner: nil,
+		paymentGateway:      nil,
+		adminNotifier:       nil,
 	}
+}
+
+func (s *Service) ConfigurePurchase(provisioner PurchaseProvisioner, gateway PaymentGateway, notifier AdminNotifier) {
+	s.purchaseProvisioner = provisioner
+	s.paymentGateway = gateway
+	s.adminNotifier = notifier
 }
 
 func (s *Service) loadManagedService(ctx context.Context, telegramID int64, containerID string) (*managedService, error) {

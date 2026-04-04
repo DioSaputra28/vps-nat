@@ -37,7 +37,13 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	userHandler := handlers.NewUserHandler(userService)
 	telegramRepository := telegram.NewRepository(deps.DB)
 	telegramService := telegram.NewService(telegramRepository, deps.Incus)
+	telegramService.ConfigurePurchase(
+		telegram.NewIncusPurchaseProvisioner(deps.Incus, cfg.Incus.NetworkName),
+		telegram.NewPakasirGateway(cfg.Pakasir.BaseURL, cfg.Pakasir.ProjectSlug, cfg.Pakasir.APIKey),
+		telegram.NewTelegramAdminNotifier(cfg.Alerts.TelegramBotToken, cfg.Alerts.TelegramChatID),
+	)
 	telegramHandler := handlers.NewTelegramHandler(telegramService, cfg.Telegram.BotSecret)
+	paymentWebhookHandler := handlers.NewPaymentWebhookHandler(telegramService)
 	containerRepository := containers.NewRepository(deps.DB)
 	containerService := containers.NewService(containerRepository, deps.Incus)
 	containerHandler := handlers.NewContainerHandler(containerService)
@@ -49,6 +55,8 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	telegramRoutes.POST("/start", telegramHandler.Start)
 	telegramRoutes.POST("/home", telegramHandler.Home)
 	telegramRoutes.POST("/buy-vps", telegramHandler.BuyVPS)
+	telegramRoutes.POST("/buy-vps/submit", telegramHandler.BuyVPSSubmit)
+	telegramRoutes.POST("/buy-vps/status", telegramHandler.BuyVPSStatus)
 	telegramRoutes.POST("/my-vps", telegramHandler.MyVPS)
 	telegramRoutes.POST("/my-vps/detail", telegramHandler.MyVPSDetail)
 	telegramRoutes.POST("/my-vps/start", telegramHandler.StartAction)
@@ -101,6 +109,9 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	containerRoutes.POST("/:id/actions/start", containerHandler.Start)
 	containerRoutes.POST("/:id/actions/stop", containerHandler.Stop)
 	containerRoutes.POST("/:id/actions/suspend", containerHandler.Suspend)
+
+	paymentRoutes := router.Group("/payments")
+	paymentRoutes.POST("/pakasir/webhook", paymentWebhookHandler.Pakasir)
 
 	return router
 }

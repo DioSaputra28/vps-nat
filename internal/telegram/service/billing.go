@@ -52,14 +52,15 @@ func BuildOrder(userID string, pkg *model.Package, orderType string, targetServi
 
 func BuildPayment(orderID *string, purpose string, method string, amount int64, now time.Time) model.Payment {
 	return model.Payment{
-		ID:        uuid.NewString(),
-		OrderID:   orderID,
-		Purpose:   purpose,
-		Method:    method,
-		Amount:    amount,
-		Status:    "pending",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:              uuid.NewString(),
+		OrderID:         orderID,
+		Purpose:         purpose,
+		Method:          method,
+		ProviderPayload: map[string]any{},
+		Amount:          amount,
+		Status:          "pending",
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 }
 

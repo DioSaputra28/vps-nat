@@ -16,6 +16,8 @@ type Config struct {
 	Database DatabaseConfig
 	Auth     AuthConfig
 	Telegram TelegramConfig
+	Pakasir  PakasirConfig
+	Alerts   AlertConfig
 	Incus    IncusConfig
 }
 
@@ -35,6 +37,17 @@ type AuthConfig struct {
 
 type TelegramConfig struct {
 	BotSecret string
+}
+
+type PakasirConfig struct {
+	BaseURL     string
+	ProjectSlug string
+	APIKey      string
+}
+
+type AlertConfig struct {
+	TelegramBotToken string
+	TelegramChatID   string
 }
 
 type DatabaseConfig struct {
@@ -57,6 +70,7 @@ type IncusConfig struct {
 	Mode               string
 	Socket             string
 	RemoteAddr         string
+	NetworkName        string
 	UserAgent          string
 	TLSClientCertPath  string
 	TLSClientKeyPath   string
@@ -83,6 +97,15 @@ func Load() (Config, error) {
 		Telegram: TelegramConfig{
 			BotSecret: os.Getenv("TELEGRAM_BOT_SECRET"),
 		},
+		Pakasir: PakasirConfig{
+			BaseURL:     getEnv("PAKASIR_BASE_URL", "https://app.pakasir.com"),
+			ProjectSlug: os.Getenv("PAKASIR_PROJECT_SLUG"),
+			APIKey:      os.Getenv("PAKASIR_API_KEY"),
+		},
+		Alerts: AlertConfig{
+			TelegramBotToken: os.Getenv("ADMIN_ALERT_TELEGRAM_BOT_TOKEN"),
+			TelegramChatID:   os.Getenv("ADMIN_ALERT_TELEGRAM_CHAT_ID"),
+		},
 		Database: DatabaseConfig{
 			URL:             os.Getenv("DATABASE_URL"),
 			Host:            getEnv("DB_HOST", "127.0.0.1"),
@@ -102,6 +125,7 @@ func Load() (Config, error) {
 			Mode:               getEnv("INCUS_MODE", "unix"),
 			Socket:             os.Getenv("INCUS_SOCKET"),
 			RemoteAddr:         os.Getenv("INCUS_REMOTE_ADDR"),
+			NetworkName:        os.Getenv("INCUS_NETWORK_NAME"),
 			UserAgent:          getEnv("INCUS_USER_AGENT", "vps-nat-backend"),
 			TLSClientCertPath:  os.Getenv("INCUS_TLS_CLIENT_CERT_PATH"),
 			TLSClientKeyPath:   os.Getenv("INCUS_TLS_CLIENT_KEY_PATH"),

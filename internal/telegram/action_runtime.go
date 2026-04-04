@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"log"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 )
 
 func (s *Service) RuntimeAction(ctx context.Context, input RuntimeActionInput) (*ActionAcceptedResult, error) {
+	log.Printf("[telegram][runtime] telegram_id=%d container_id=%s action=%s", input.TelegramID, input.ContainerID, input.Action)
 	if input.TelegramID <= 0 {
 		return nil, ErrInvalidActionRequest
 	}
@@ -37,8 +39,10 @@ func (s *Service) RuntimeAction(ctx context.Context, input RuntimeActionInput) (
 
 	opID, err := s.actions.ChangeState(ms.Instance.IncusInstanceName, action)
 	if err != nil {
+		log.Printf("[telegram][runtime] instance=%s action=%s failed: %v", ms.Instance.IncusInstanceName, action, err)
 		return nil, err
 	}
+	log.Printf("[telegram][runtime] instance=%s action=%s operation_id=%s", ms.Instance.IncusInstanceName, action, opID)
 
 	now := time.Now().UTC()
 	instanceStatus, serviceStatus := telegramservice.RuntimeStatuses(action)
@@ -103,6 +107,7 @@ func (s *Service) RuntimeAction(ctx context.Context, input RuntimeActionInput) (
 }
 
 func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (*ChangePasswordResult, error) {
+	log.Printf("[telegram][change-password] telegram_id=%d container_id=%s", input.TelegramID, input.ContainerID)
 	if input.TelegramID <= 0 || len(strings.TrimSpace(input.NewPassword)) < 8 {
 		return nil, ErrInvalidActionRequest
 	}
@@ -120,8 +125,10 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 
 	opID, err := s.actions.ChangePassword(ms.Instance.IncusInstanceName, strings.TrimSpace(input.NewPassword))
 	if err != nil {
+		log.Printf("[telegram][change-password] instance=%s failed: %v", ms.Instance.IncusInstanceName, err)
 		return nil, err
 	}
+	log.Printf("[telegram][change-password] instance=%s operation_id=%s", ms.Instance.IncusInstanceName, opID)
 	ms.Instance.LastIncusOperationID = &opID
 
 	job := telegramservice.SuccessJob(ms.Service.ID, nil, "change_password", actorTypeTelegramUser, ms.User.ID, opID, map[string]any{"container_id": ms.Instance.ID})
@@ -155,6 +162,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 }
 
 func (s *Service) ResetSSH(ctx context.Context, input ResetSSHInput) (*ResetSSHResult, error) {
+	log.Printf("[telegram][ssh-reset] telegram_id=%d container_id=%s", input.TelegramID, input.ContainerID)
 	if input.TelegramID <= 0 {
 		return nil, ErrInvalidActionRequest
 	}
@@ -172,8 +180,10 @@ func (s *Service) ResetSSH(ctx context.Context, input ResetSSHInput) (*ResetSSHR
 
 	opID, password, err := s.actions.ResetSSH(ms.Instance.IncusInstanceName)
 	if err != nil {
+		log.Printf("[telegram][ssh-reset] instance=%s failed: %v", ms.Instance.IncusInstanceName, err)
 		return nil, err
 	}
+	log.Printf("[telegram][ssh-reset] instance=%s operation_id=%s", ms.Instance.IncusInstanceName, opID)
 	ms.Instance.LastIncusOperationID = &opID
 
 	job := telegramservice.SuccessJob(ms.Service.ID, nil, "change_password", actorTypeTelegramUser, ms.User.ID, opID, map[string]any{

@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -242,6 +243,7 @@ func (s *Service) UpgradePreview(ctx context.Context, input UpgradePreviewInput)
 }
 
 func (s *Service) UpgradeSubmit(ctx context.Context, input UpgradeSubmitInput) (*BillingSubmitResult, error) {
+	log.Printf("[telegram][upgrade] telegram_id=%d container_id=%s target_package_id=%s payment_method=%s", input.TelegramID, input.ContainerID, input.TargetPackageID, input.PaymentMethod)
 	if strings.TrimSpace(input.TargetPackageID) == "" {
 		return nil, ErrInvalidActionRequest
 	}
@@ -305,8 +307,10 @@ func (s *Service) UpgradeSubmit(ctx context.Context, input UpgradeSubmitInput) (
 
 		opID, err := s.actions.ApplyResourceLimits(ms.Instance.IncusInstanceName, targetPackage.CPU, targetPackage.RAMMB, targetPackage.DiskGB)
 		if err != nil {
+			log.Printf("[telegram][upgrade] instance=%s apply limits failed: %v", ms.Instance.IncusInstanceName, err)
 			return nil, err
 		}
+		log.Printf("[telegram][upgrade] instance=%s apply limits operation_id=%s target_package=%s amount=%d", ms.Instance.IncusInstanceName, opID, targetPackage.ID, amount)
 
 		order.Status = "completed"
 		order.PaymentStatus = "paid"
@@ -381,6 +385,13 @@ func (s *Service) UpgradeSubmit(ctx context.Context, input UpgradeSubmitInput) (
 			}
 			return tx.Create(event).Error
 		}); err != nil {
+			log.Printf("[telegram][upgrade] instance=%s persist failed after apply limits, reverting to cpu=%d ram_mb=%d disk_gb=%d: %v", ms.Instance.IncusInstanceName, ms.Service.CPUSnapshot, ms.Service.RAMMBSnapshot, ms.Service.DiskGBSnapshot, err)
+			revertOpID, revertErr := s.actions.ApplyResourceLimits(ms.Instance.IncusInstanceName, ms.Service.CPUSnapshot, ms.Service.RAMMBSnapshot, ms.Service.DiskGBSnapshot)
+			if revertErr != nil {
+				log.Printf("[telegram][upgrade] instance=%s revert limits failed after persist error: %v", ms.Instance.IncusInstanceName, revertErr)
+				return nil, revertErr
+			}
+			log.Printf("[telegram][upgrade] instance=%s revert limits operation_id=%s after persist error", ms.Instance.IncusInstanceName, revertOpID)
 			return nil, err
 		}
 

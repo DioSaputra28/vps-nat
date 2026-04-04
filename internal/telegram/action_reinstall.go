@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/DioSaputra28/vps-nat/internal/model"
@@ -43,6 +44,7 @@ func (s *Service) ReinstallPreview(ctx context.Context, input ReinstallPreviewIn
 }
 
 func (s *Service) ReinstallSubmit(ctx context.Context, input ReinstallSubmitInput) (*ReinstallSubmitResult, error) {
+	log.Printf("[telegram][reinstall] telegram_id=%d container_id=%s image_alias=%s", input.TelegramID, input.ContainerID, input.ImageAlias)
 	ms, err := s.loadManagedService(ctx, input.TelegramID, input.ContainerID)
 	if err != nil {
 		return nil, err
@@ -60,16 +62,34 @@ func (s *Service) ReinstallSubmit(ctx context.Context, input ReinstallSubmitInpu
 		return nil, ErrIncusUnavailable
 	}
 
-	reinstallOpID, err := s.actions.Reinstall(ms.Instance.IncusInstanceName, input.ImageAlias)
-	if err != nil {
-		return nil, err
+	if ms.Instance.Status != "stopped" {
+		stopOpID, stopErr := s.actions.ChangeState(ms.Instance.IncusInstanceName, "stop")
+		if stopErr != nil {
+			log.Printf("[telegram][reinstall] instance=%s stop before reinstall failed: %v", ms.Instance.IncusInstanceName, stopErr)
+			return nil, stopErr
+		}
+		log.Printf("[telegram][reinstall] instance=%s stop before reinstall operation_id=%s", ms.Instance.IncusInstanceName, stopOpID)
 	}
 
-	_, _ = s.actions.ChangeState(ms.Instance.IncusInstanceName, "start")
-	passOpID, newPassword, err := s.actions.ResetSSH(ms.Instance.IncusInstanceName)
+	reinstallOpID, err := s.actions.Reinstall(ms.Instance.IncusInstanceName, input.ImageAlias)
 	if err != nil {
+		log.Printf("[telegram][reinstall] instance=%s reinstall failed: %v", ms.Instance.IncusInstanceName, err)
 		return nil, err
 	}
+	log.Printf("[telegram][reinstall] instance=%s reinstall operation_id=%s", ms.Instance.IncusInstanceName, reinstallOpID)
+
+	startOpID, startErr := s.actions.ChangeState(ms.Instance.IncusInstanceName, "start")
+	if startErr != nil {
+		log.Printf("[telegram][reinstall] instance=%s start after reinstall failed: %v", ms.Instance.IncusInstanceName, startErr)
+	} else {
+		log.Printf("[telegram][reinstall] instance=%s start after reinstall operation_id=%s", ms.Instance.IncusInstanceName, startOpID)
+	}
+	passOpID, newPassword, err := s.actions.ResetSSH(ms.Instance.IncusInstanceName)
+	if err != nil {
+		log.Printf("[telegram][reinstall] instance=%s reset ssh failed: %v", ms.Instance.IncusInstanceName, err)
+		return nil, err
+	}
+	log.Printf("[telegram][reinstall] instance=%s reset ssh operation_id=%s", ms.Instance.IncusInstanceName, passOpID)
 
 	job := telegramservice.SuccessJob(ms.Service.ID, nil, "reinstall", actorTypeTelegramUser, ms.User.ID, reinstallOpID, map[string]any{
 		"container_id":       ms.Instance.ID,

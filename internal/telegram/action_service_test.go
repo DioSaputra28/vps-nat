@@ -258,6 +258,207 @@ func TestUpgradeOptionsOnlyReturnsStrictlyHigherPackages(t *testing.T) {
 	}
 }
 
+func TestUpgradeSubmitWalletUpdatesDBAndAppliesLimits(t *testing.T) {
+	t.Parallel()
+
+	svc, db := newActionServiceTestHarness(t)
+	applyCalls := 0
+	svc.actions = fakeActionExecutor{
+		applyLimitsFn: func(instanceName string, cpu int, ramMB int, diskGB int) (string, error) {
+			applyCalls++
+			if instanceName != "inst-one" || cpu != 2 || ramMB != 2048 || diskGB != 20 {
+				t.Fatalf("unexpected apply limits input: %s %d %d %d", instanceName, cpu, ramMB, diskGB)
+			}
+			return "op-upgrade-1", nil
+		},
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	seedActionServiceData(t, db, actionSeedInput{
+		telegramID:       3007,
+		userID:           "user-1",
+		walletID:         "wallet-1",
+		containerID:      "container-1",
+		serviceID:        "service-1",
+		orderID:          "order-1",
+		packageID:        "pkg-current",
+		packageName:      "Package S",
+		packagePrice:     25000,
+		packageDuration:  30,
+		serviceStatus:    "active",
+		instanceStatus:   "running",
+		currentPackageOn: true,
+		servicePrice:     25000,
+		serviceCPU:       1,
+		serviceRAMMB:     1024,
+		serviceDiskGB:    10,
+		expiresAt:        now.Add(20 * 24 * time.Hour),
+		walletBalance:    100000,
+	})
+
+	target := model.Package{
+		ID:           "pkg-upgrade",
+		Name:         "Package M",
+		CPU:          2,
+		RAMMB:        2048,
+		DiskGB:       20,
+		Price:        50000,
+		DurationDays: 30,
+		IsActive:     true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := db.Create(&target).Error; err != nil {
+		t.Fatalf("failed to create target package: %v", err)
+	}
+
+	result, err := svc.UpgradeSubmit(context.Background(), UpgradeSubmitInput{
+		TelegramID:      3007,
+		ContainerID:     "container-1",
+		TargetPackageID: "pkg-upgrade",
+		PaymentMethod:   "wallet",
+	})
+	if err != nil {
+		t.Fatalf("UpgradeSubmit returned error: %v", err)
+	}
+
+	if !result.Applied || result.Status != "completed" {
+		t.Fatalf("expected applied completed result, got applied=%v status=%s", result.Applied, result.Status)
+	}
+	if applyCalls != 1 {
+		t.Fatalf("expected apply limits once, got %d", applyCalls)
+	}
+
+	var service model.Service
+	if err := db.First(&service, "id = ?", "service-1").Error; err != nil {
+		t.Fatalf("failed to load service: %v", err)
+	}
+	if service.CurrentPackageID != "pkg-upgrade" || service.CPUSnapshot != 2 || service.RAMMBSnapshot != 2048 || service.DiskGBSnapshot != 20 || service.PriceSnapshot != 50000 {
+		t.Fatalf("service snapshot not updated: %#v", service)
+	}
+
+	var wallet model.Wallet
+	if err := db.First(&wallet, "id = ?", "wallet-1").Error; err != nil {
+		t.Fatalf("failed to load wallet: %v", err)
+	}
+	if wallet.Balance != 100000-result.Amount {
+		t.Fatalf("expected wallet balance %d, got %d", 100000-result.Amount, wallet.Balance)
+	}
+
+	var payment model.Payment
+	if err := db.First(&payment, "id = ?", result.PaymentID).Error; err != nil {
+		t.Fatalf("failed to load payment: %v", err)
+	}
+	if payment.ProviderPayload == nil {
+		t.Fatalf("expected provider payload to be non-nil")
+	}
+}
+
+func TestUpgradeSubmitWalletRevertsLimitsWhenPersistenceFails(t *testing.T) {
+	t.Parallel()
+
+	svc, db := newActionServiceTestHarness(t)
+	var calls []struct {
+		cpu    int
+		ramMB  int
+		diskGB int
+	}
+	svc.actions = fakeActionExecutor{
+		applyLimitsFn: func(instanceName string, cpu int, ramMB int, diskGB int) (string, error) {
+			calls = append(calls, struct {
+				cpu    int
+				ramMB  int
+				diskGB int
+			}{cpu: cpu, ramMB: ramMB, diskGB: diskGB})
+			return "op-upgrade-fail", nil
+		},
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	seedActionServiceData(t, db, actionSeedInput{
+		telegramID:       3008,
+		userID:           "user-1",
+		walletID:         "wallet-1",
+		containerID:      "container-1",
+		serviceID:        "service-1",
+		orderID:          "order-1",
+		packageID:        "pkg-current",
+		packageName:      "Package S",
+		packagePrice:     25000,
+		packageDuration:  30,
+		serviceStatus:    "active",
+		instanceStatus:   "running",
+		currentPackageOn: true,
+		servicePrice:     25000,
+		serviceCPU:       1,
+		serviceRAMMB:     1024,
+		serviceDiskGB:    10,
+		expiresAt:        now.Add(20 * 24 * time.Hour),
+		walletBalance:    100000,
+	})
+
+	target := model.Package{
+		ID:           "pkg-upgrade",
+		Name:         "Package M",
+		CPU:          2,
+		RAMMB:        2048,
+		DiskGB:       20,
+		Price:        50000,
+		DurationDays: 30,
+		IsActive:     true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := db.Create(&target).Error; err != nil {
+		t.Fatalf("failed to create target package: %v", err)
+	}
+
+	if err := db.Callback().Create().Before("gorm:create").Register("test:fail-payment-create", func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "payments" {
+			tx.AddError(errors.New("forced payment create failure"))
+		}
+	}); err != nil {
+		t.Fatalf("failed to register create callback: %v", err)
+	}
+	defer db.Callback().Create().Remove("test:fail-payment-create")
+
+	_, err := svc.UpgradeSubmit(context.Background(), UpgradeSubmitInput{
+		TelegramID:      3008,
+		ContainerID:     "container-1",
+		TargetPackageID: "pkg-upgrade",
+		PaymentMethod:   "wallet",
+	})
+	if err == nil {
+		t.Fatalf("expected UpgradeSubmit to fail")
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("expected two apply limits calls (apply + revert), got %d", len(calls))
+	}
+	if calls[0].cpu != 2 || calls[0].ramMB != 2048 || calls[0].diskGB != 20 {
+		t.Fatalf("unexpected first apply call: %#v", calls[0])
+	}
+	if calls[1].cpu != 1 || calls[1].ramMB != 1024 || calls[1].diskGB != 10 {
+		t.Fatalf("unexpected revert apply call: %#v", calls[1])
+	}
+
+	var service model.Service
+	if err := db.First(&service, "id = ?", "service-1").Error; err != nil {
+		t.Fatalf("failed to load service: %v", err)
+	}
+	if service.CurrentPackageID != "pkg-current" || service.CPUSnapshot != 1 || service.RAMMBSnapshot != 1024 || service.DiskGBSnapshot != 10 || service.PriceSnapshot != 25000 {
+		t.Fatalf("service snapshot unexpectedly changed: %#v", service)
+	}
+
+	var wallet model.Wallet
+	if err := db.First(&wallet, "id = ?", "wallet-1").Error; err != nil {
+		t.Fatalf("failed to load wallet: %v", err)
+	}
+	if wallet.Balance != 100000 {
+		t.Fatalf("wallet balance unexpectedly changed: %d", wallet.Balance)
+	}
+}
+
 func TestTransferSubmitMovesOwnership(t *testing.T) {
 	t.Parallel()
 
@@ -367,6 +568,79 @@ func TestCancelPreviewCalculatesProratedRefund(t *testing.T) {
 	}
 	if result.PackageName != "Package S" {
 		t.Fatalf("expected package Package S, got %s", result.PackageName)
+	}
+}
+
+func TestReinstallSubmitStopsThenReinstallsThenStartsAndResetsSSH(t *testing.T) {
+	t.Parallel()
+
+	svc, db := newActionServiceTestHarness(t)
+	var sequence []string
+	svc.actions = fakeActionExecutor{
+		changeStateFn: func(instanceName string, action string) (string, error) {
+			sequence = append(sequence, "state:"+action)
+			return "op-" + action, nil
+		},
+		reinstallFn: func(instanceName string, imageAlias string) (string, error) {
+			sequence = append(sequence, "reinstall:"+imageAlias)
+			return "op-reinstall", nil
+		},
+		resetSSHFn: func(instanceName string) (string, string, error) {
+			sequence = append(sequence, "ssh-reset")
+			return "op-ssh-reset", "new-secret", nil
+		},
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	seedActionServiceData(t, db, actionSeedInput{
+		telegramID:       3009,
+		userID:           "user-1",
+		walletID:         "wallet-1",
+		containerID:      "container-1",
+		serviceID:        "service-1",
+		orderID:          "order-1",
+		packageID:        "pkg-current",
+		packageName:      "Package S",
+		packagePrice:     25000,
+		packageDuration:  30,
+		serviceStatus:    "active",
+		instanceStatus:   "running",
+		currentPackageOn: true,
+		servicePrice:     25000,
+		serviceCPU:       1,
+		serviceRAMMB:     1024,
+		serviceDiskGB:    10,
+		expiresAt:        now.Add(20 * 24 * time.Hour),
+	})
+
+	result, err := svc.ReinstallSubmit(context.Background(), ReinstallSubmitInput{
+		TelegramID:  3009,
+		ContainerID: "container-1",
+		ImageAlias:  "images:debian/12",
+	})
+	if err != nil {
+		t.Fatalf("ReinstallSubmit returned error: %v", err)
+	}
+
+	expected := []string{"state:stop", "reinstall:images:debian/12", "state:start", "ssh-reset"}
+	if len(sequence) != len(expected) {
+		t.Fatalf("unexpected sequence length: %#v", sequence)
+	}
+	for i := range expected {
+		if sequence[i] != expected[i] {
+			t.Fatalf("unexpected sequence[%d]: got %s want %s", i, sequence[i], expected[i])
+		}
+	}
+	if result.NewPassword != "new-secret" {
+		t.Fatalf("unexpected new password: %s", result.NewPassword)
+	}
+
+	var instance model.ServiceInstance
+	if err := db.First(&instance, "id = ?", "container-1").Error; err != nil {
+		t.Fatalf("failed to load instance: %v", err)
+	}
+	if instance.ImageAlias != "images:debian/12" || instance.Status != "running" {
+		t.Fatalf("unexpected instance state: %#v", instance)
 	}
 }
 
