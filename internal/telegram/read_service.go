@@ -7,24 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DioSaputra28/vps-nat/internal/incus"
 	"github.com/DioSaputra28/vps-nat/internal/model"
 	"github.com/google/uuid"
 	"github.com/lxc/incus/v6/shared/api"
 	"gorm.io/gorm"
 )
-
-var (
-	ErrInvalidTelegramUser  = errors.New("invalid telegram user")
-	ErrTelegramUserNotFound = errors.New("telegram user not found")
-	ErrMyVPSNotFound        = errors.New("my vps not found")
-)
-
-type Service struct {
-	repo    *Repository
-	incus   *incus.Client
-	actions actionExecutor
-}
 
 type SyncStartInput struct {
 	TelegramID       int64
@@ -178,14 +165,6 @@ type HomePlatform struct {
 	AccessMethod   string `json:"access_method"`
 }
 
-func NewService(repo *Repository, incusClient *incus.Client) *Service {
-	return &Service{
-		repo:    repo,
-		incus:   incusClient,
-		actions: newActionExecutor(incusClient),
-	}
-}
-
 func (s *Service) SyncStart(ctx context.Context, input SyncStartInput) (*SyncStartResult, error) {
 	if input.TelegramID <= 0 {
 		return nil, ErrInvalidTelegramUser
@@ -227,10 +206,7 @@ func (s *Service) SyncStart(ctx context.Context, input SyncStartInput) (*SyncSta
 		}
 
 		user.Wallet = &wallet
-		return &SyncStartResult{
-			User:    user,
-			Created: true,
-		}, nil
+		return &SyncStartResult{User: user, Created: true}, nil
 	}
 
 	existing.TelegramUsername = username
@@ -256,10 +232,7 @@ func (s *Service) SyncStart(ctx context.Context, input SyncStartInput) (*SyncSta
 	}
 
 	existing.Wallet = &wallet
-	return &SyncStartResult{
-		User:    *existing,
-		Created: false,
-	}, nil
+	return &SyncStartResult{User: *existing, Created: false}, nil
 }
 
 func (s *Service) Home(ctx context.Context, input HomeInput) (*HomeResult, error) {
@@ -272,7 +245,6 @@ func (s *Service) Home(ctx context.Context, input HomeInput) (*HomeResult, error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrTelegramUserNotFound
 		}
-
 		return nil, err
 	}
 
@@ -323,60 +295,16 @@ func (s *Service) Home(ctx context.Context, input HomeInput) (*HomeResult, error
 }
 
 func (s *Service) BuyVPS(ctx context.Context, input BuyVPSInput) (*BuyVPSResult, error) {
-	if input.TelegramID <= 0 {
-		return nil, ErrInvalidTelegramUser
-	}
-
-	user, err := s.repo.FindUserByTelegramID(ctx, input.TelegramID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrTelegramUserNotFound
-		}
-
-		return nil, err
-	}
-
-	packages, err := s.repo.FindActivePackages(ctx)
+	home, err := s.Home(ctx, HomeInput{TelegramID: input.TelegramID})
 	if err != nil {
 		return nil, err
 	}
 
-	result := &BuyVPSResult{
-		User: HomeUser{
-			ID:               user.ID,
-			TelegramID:       user.TelegramID,
-			TelegramUsername: user.TelegramUsername,
-			DisplayName:      user.DisplayName,
-			Status:           user.Status,
-			CreatedAt:        user.CreatedAt,
-			UpdatedAt:        user.UpdatedAt,
-		},
-	}
-
-	if user.Wallet != nil {
-		result.Wallet = HomeWallet{
-			ID:        user.Wallet.ID,
-			Balance:   user.Wallet.Balance,
-			CreatedAt: user.Wallet.CreatedAt,
-			UpdatedAt: user.Wallet.UpdatedAt,
-		}
-	}
-
-	result.Packages = make([]HomePackage, 0, len(packages))
-	for i := range packages {
-		result.Packages = append(result.Packages, HomePackage{
-			ID:           packages[i].ID,
-			Name:         packages[i].Name,
-			Description:  packages[i].Description,
-			CPU:          packages[i].CPU,
-			RAMMB:        packages[i].RAMMB,
-			DiskGB:       packages[i].DiskGB,
-			Price:        packages[i].Price,
-			DurationDays: packages[i].DurationDays,
-		})
-	}
-
-	return result, nil
+	return &BuyVPSResult{
+		User:     home.User,
+		Wallet:   home.Wallet,
+		Packages: home.Packages,
+	}, nil
 }
 
 func (s *Service) MyVPS(ctx context.Context, input MyVPSInput) (*MyVPSResult, error) {
@@ -389,7 +317,6 @@ func (s *Service) MyVPS(ctx context.Context, input MyVPSInput) (*MyVPSResult, er
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrTelegramUserNotFound
 		}
-
 		return nil, err
 	}
 
@@ -399,10 +326,7 @@ func (s *Service) MyVPS(ctx context.Context, input MyVPSInput) (*MyVPSResult, er
 	}
 
 	liveMap := s.fetchMyVPSLiveStatuses(instances)
-	result := &MyVPSResult{
-		Items: make([]MyVPSItem, 0, len(instances)),
-	}
-
+	result := &MyVPSResult{Items: make([]MyVPSItem, 0, len(instances))}
 	for i := range instances {
 		result.Items = append(result.Items, buildMyVPSItem(&instances[i], liveMap))
 	}
@@ -420,7 +344,6 @@ func (s *Service) MyVPSDetail(ctx context.Context, input MyVPSDetailInput) (*MyV
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrMyVPSNotFound
 		}
-
 		return nil, err
 	}
 
@@ -475,7 +398,6 @@ func (s *Service) MyVPSDetail(ctx context.Context, input MyVPSDetailInput) (*MyV
 
 	if live.State != nil {
 		result.Live.ResourceUse = buildMyVPSUsage(live.State)
-
 		if !live.State.StartedAt.IsZero() {
 			uptimeSeconds := int64(time.Since(live.State.StartedAt).Seconds())
 			result.UptimeSeconds = &uptimeSeconds
@@ -520,26 +442,15 @@ func normalizeOptionalString(value *string) *string {
 	if value == nil {
 		return nil
 	}
-
 	trimmed := strings.TrimSpace(*value)
 	if trimmed == "" {
 		return nil
 	}
-
 	return &trimmed
 }
 
 func defaultOperatingSystems() []string {
-	return []string{
-		"Debian 10",
-		"Debian 11",
-		"Debian 12",
-		"Debian 13",
-		"Ubuntu 20.04",
-		"Ubuntu 22.04",
-		"Ubuntu 24.04",
-		"Kali Linux",
-	}
+	return []string{"Debian 10", "Debian 11", "Debian 12", "Debian 13", "Ubuntu 20.04", "Ubuntu 22.04", "Ubuntu 24.04", "Kali Linux"}
 }
 
 func defaultRules() []string {
@@ -553,12 +464,7 @@ func defaultRules() []string {
 }
 
 func defaultPlatform() HomePlatform {
-	return HomePlatform{
-		Name:           "VPS NAT",
-		ServiceType:    "VPS NAT",
-		Virtualization: "Incus Container",
-		AccessMethod:   "SSH",
-	}
+	return HomePlatform{Name: "VPS NAT", ServiceType: "VPS NAT", Virtualization: "Incus Container", AccessMethod: "SSH"}
 }
 
 func fetchStatusMap(instances []model.ServiceInstance, fullInstances []api.InstanceFull) map[string]api.InstanceFull {
@@ -571,13 +477,11 @@ func fetchStatusMap(instances []model.ServiceInstance, fullInstances []api.Insta
 	for i := range fullInstances {
 		fullMap[fullInstances[i].Name] = fullInstances[i]
 	}
-
 	for i := range instances {
 		if live, ok := fullMap[instances[i].IncusInstanceName]; ok {
 			result[instances[i].IncusInstanceName] = live
 		}
 	}
-
 	return result
 }
 
@@ -590,7 +494,6 @@ func (s *Service) fetchMyVPSLiveStatuses(instances []model.ServiceInstance) map[
 	if err != nil {
 		return map[string]api.InstanceFull{}
 	}
-
 	return fetchStatusMap(instances, fullInstances)
 }
 
@@ -602,27 +505,22 @@ func buildMyVPSItem(instance *model.ServiceInstance, liveMap map[string]api.Inst
 		Status:            instance.Status,
 		CreatedAt:         instance.CreatedAt,
 	}
-
 	if instance.Service != nil {
 		item.PackageName = instance.Service.PackageNameSnapshot
 		item.ServiceStatus = instance.Service.Status
 		item.ExpiresAt = instance.Service.ExpiresAt
 		item.RemainingDays = remainingDays(instance.Service.ExpiresAt)
 	}
-
 	if live, ok := liveMap[instance.IncusInstanceName]; ok {
 		item.Status = normalizeStatus(live.Status, item.Status)
 		item.LiveAvailable = true
 	}
-
 	return item
 }
 
 func buildMyVPSUsage(state *api.InstanceState) MyVPSUsage {
 	return MyVPSUsage{
-		CPU: MyVPSCPUUsage{
-			UsageNS: state.CPU.Usage,
-		},
+		CPU: MyVPSCPUUsage{UsageNS: state.CPU.Usage},
 		Memory: MyVPSMemoryUsage{
 			UsageBytes:   state.Memory.Usage,
 			TotalBytes:   state.Memory.Total,
@@ -647,7 +545,6 @@ func buildMyVPSDiskUsage(disks map[string]api.InstanceStateDisk) MyVPSDiskUsage 
 		usage += disk.Usage
 		total += disk.Total
 	}
-
 	return MyVPSDiskUsage{
 		UsageBytes:   usage,
 		TotalBytes:   total,
@@ -656,19 +553,13 @@ func buildMyVPSDiskUsage(disks map[string]api.InstanceStateDisk) MyVPSDiskUsage 
 }
 
 func remainingDays(expiresAt *time.Time) *int {
-	if expiresAt == nil {
+	if expiresAt == nil || expiresAt.IsZero() {
 		return nil
 	}
-
-	if expiresAt.IsZero() {
-		return nil
-	}
-
 	remaining := int(time.Until(*expiresAt).Hours() / 24)
 	if remaining < 0 {
 		remaining = 0
 	}
-
 	return &remaining
 }
 
@@ -676,7 +567,6 @@ func percentage(usage int64, total int64) *float64 {
 	if total <= 0 {
 		return nil
 	}
-
 	value := (float64(usage) / float64(total)) * 100
 	return &value
 }
@@ -685,7 +575,6 @@ func normalizeStatus(liveStatus string, fallback string) string {
 	if strings.TrimSpace(liveStatus) == "" {
 		return fallback
 	}
-
 	return strings.ToLower(strings.TrimSpace(liveStatus))
 }
 
@@ -693,11 +582,9 @@ func humanizeDuration(duration time.Duration) string {
 	if duration <= 0 {
 		return "0m"
 	}
-
 	days := int(duration.Hours()) / 24
 	hours := int(duration.Hours()) % 24
 	minutes := int(duration.Minutes()) % 60
-
 	parts := []string{}
 	if days > 0 {
 		parts = append(parts, fmt.Sprintf("%dhari", days))
@@ -711,7 +598,6 @@ func humanizeDuration(duration time.Duration) string {
 	if len(parts) == 0 {
 		return "0m"
 	}
-
 	return strings.Join(parts, " ")
 }
 
