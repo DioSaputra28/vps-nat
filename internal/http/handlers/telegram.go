@@ -24,6 +24,10 @@ type telegramStartRequest struct {
 	LastName         *string `json:"last_name"`
 }
 
+type telegramHomeRequest struct {
+	TelegramID int64 `json:"telegram_id" binding:"required"`
+}
+
 func NewTelegramHandler(service *telegram.Service, botSecret string) TelegramHandler {
 	return TelegramHandler{
 		service:   service,
@@ -32,8 +36,7 @@ func NewTelegramHandler(service *telegram.Service, botSecret string) TelegramHan
 }
 
 func (h TelegramHandler) Start(c *gin.Context) {
-	if h.botSecret != "" && c.GetHeader(telegramBotSecretHeader) != h.botSecret {
-		response.Fail(c, http.StatusUnauthorized, "invalid telegram bot secret", "unauthorized", nil)
+	if !h.authorize(c) {
 		return
 	}
 
@@ -83,4 +86,49 @@ func (h TelegramHandler) Start(c *gin.Context) {
 		},
 		"created": result.Created,
 	})
+}
+
+func (h TelegramHandler) Home(c *gin.Context) {
+	if !h.authorize(c) {
+		return
+	}
+
+	var req telegramHomeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, http.StatusBadRequest, "invalid request body", "bad_request", nil)
+		return
+	}
+
+	result, err := h.service.Home(c.Request.Context(), telegram.HomeInput{
+		TelegramID: req.TelegramID,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, telegram.ErrInvalidTelegramUser):
+			response.Fail(c, http.StatusBadRequest, "invalid telegram user data", "bad_request", nil)
+		case errors.Is(err, telegram.ErrTelegramUserNotFound):
+			response.Fail(c, http.StatusNotFound, "telegram user not found", "not_found", nil)
+		default:
+			response.Fail(c, http.StatusInternalServerError, "failed to fetch telegram home data", "internal_server_error", nil)
+		}
+		return
+	}
+
+	response.Success(c, http.StatusOK, "telegram home data fetched successfully", gin.H{
+		"user":              result.User,
+		"wallet":            result.Wallet,
+		"packages":          result.Packages,
+		"operating_systems": result.OperatingSystems,
+		"rules":             result.Rules,
+		"platform":          result.Platform,
+	})
+}
+
+func (h TelegramHandler) authorize(c *gin.Context) bool {
+	if h.botSecret != "" && c.GetHeader(telegramBotSecretHeader) != h.botSecret {
+		response.Fail(c, http.StatusUnauthorized, "invalid telegram bot secret", "unauthorized", nil)
+		return false
+	}
+
+	return true
 }

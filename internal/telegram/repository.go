@@ -26,6 +26,22 @@ func (r *Repository) FindUserByTelegramID(ctx context.Context, telegramID int64)
 	return &user, nil
 }
 
+func (r *Repository) FindActivePackages(ctx context.Context) ([]model.Package, error) {
+	var packages []model.Package
+	err := r.db.WithContext(ctx).
+		Model(&model.Package{}).
+		Where("is_active = ?", true).
+		Order("duration_days ASC").
+		Order("price ASC").
+		Order("name ASC").
+		Find(&packages).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return packages, nil
+}
+
 func (r *Repository) CreateOrUpdate(ctx context.Context, user *model.User, wallet *model.Wallet, isNew bool, walletExists bool) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if isNew {
