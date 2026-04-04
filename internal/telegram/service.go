@@ -3,21 +3,27 @@ package telegram
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/DioSaputra28/vps-nat/internal/incus"
 	"github.com/DioSaputra28/vps-nat/internal/model"
 	"github.com/google/uuid"
+	"github.com/lxc/incus/v6/shared/api"
 	"gorm.io/gorm"
 )
 
 var (
 	ErrInvalidTelegramUser  = errors.New("invalid telegram user")
 	ErrTelegramUserNotFound = errors.New("telegram user not found")
+	ErrMyVPSNotFound        = errors.New("my vps not found")
 )
 
 type Service struct {
-	repo *Repository
+	repo    *Repository
+	incus   *incus.Client
+	actions actionExecutor
 }
 
 type SyncStartInput struct {
@@ -56,6 +62,87 @@ type BuyVPSResult struct {
 	Packages []HomePackage
 }
 
+type MyVPSInput struct {
+	TelegramID int64
+}
+
+type MyVPSResult struct {
+	Items []MyVPSItem `json:"items"`
+}
+
+type MyVPSItem struct {
+	ContainerID       string     `json:"container_id"`
+	ServiceID         string     `json:"service_id"`
+	IncusInstanceName string     `json:"incus_instance_name"`
+	PackageName       string     `json:"package_name"`
+	Status            string     `json:"status"`
+	ServiceStatus     string     `json:"service_status"`
+	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
+	RemainingDays     *int       `json:"remaining_days,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	LiveAvailable     bool       `json:"live_available"`
+}
+
+type MyVPSDetailInput struct {
+	TelegramID  int64
+	ContainerID string
+}
+
+type MyVPSDetailResult struct {
+	ContainerID       string          `json:"container_id"`
+	ServiceID         string          `json:"service_id"`
+	IncusInstanceName string          `json:"incus_instance_name"`
+	ImageAlias        string          `json:"image_alias"`
+	OSFamily          *string         `json:"os_family,omitempty"`
+	InternalIP        *string         `json:"internal_ip,omitempty"`
+	MainPublicIP      *string         `json:"main_public_ip,omitempty"`
+	SSHPort           *int            `json:"ssh_port,omitempty"`
+	PackageName       string          `json:"package_name"`
+	Status            string          `json:"status"`
+	ServiceStatus     string          `json:"service_status"`
+	CPULimit          int             `json:"cpu_limit"`
+	RAMMBLimit        int             `json:"ram_mb_limit"`
+	DiskGBLimit       int             `json:"disk_gb_limit"`
+	Price             int64           `json:"price"`
+	ExpiresAt         *time.Time      `json:"expires_at,omitempty"`
+	RemainingDays     *int            `json:"remaining_days,omitempty"`
+	UptimeSeconds     *int64          `json:"uptime_seconds,omitempty"`
+	UptimeHuman       *string         `json:"uptime_human,omitempty"`
+	Live              MyVPSLiveDetail `json:"live"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+}
+
+type MyVPSLiveDetail struct {
+	Available   bool       `json:"available"`
+	Status      string     `json:"status,omitempty"`
+	StatusCode  int        `json:"status_code,omitempty"`
+	Error       *string    `json:"error,omitempty"`
+	ResourceUse MyVPSUsage `json:"resource_usage"`
+}
+
+type MyVPSUsage struct {
+	CPU    MyVPSCPUUsage    `json:"cpu"`
+	Memory MyVPSMemoryUsage `json:"memory"`
+	Disk   MyVPSDiskUsage   `json:"disk"`
+}
+
+type MyVPSCPUUsage struct {
+	UsageNS int64 `json:"usage_ns"`
+}
+
+type MyVPSMemoryUsage struct {
+	UsageBytes   int64    `json:"usage_bytes"`
+	TotalBytes   int64    `json:"total_bytes"`
+	UsagePercent *float64 `json:"usage_percent,omitempty"`
+}
+
+type MyVPSDiskUsage struct {
+	UsageBytes   int64    `json:"usage_bytes"`
+	TotalBytes   int64    `json:"total_bytes"`
+	UsagePercent *float64 `json:"usage_percent,omitempty"`
+}
+
 type HomeUser struct {
 	ID               string    `json:"id"`
 	TelegramID       int64     `json:"telegram_id"`
@@ -91,8 +178,12 @@ type HomePlatform struct {
 	AccessMethod   string `json:"access_method"`
 }
 
-func NewService(repo *Repository) *Service {
-	return &Service{repo: repo}
+func NewService(repo *Repository, incusClient *incus.Client) *Service {
+	return &Service{
+		repo:    repo,
+		incus:   incusClient,
+		actions: newActionExecutor(incusClient),
+	}
 }
 
 func (s *Service) SyncStart(ctx context.Context, input SyncStartInput) (*SyncStartResult, error) {
@@ -288,6 +379,114 @@ func (s *Service) BuyVPS(ctx context.Context, input BuyVPSInput) (*BuyVPSResult,
 	return result, nil
 }
 
+func (s *Service) MyVPS(ctx context.Context, input MyVPSInput) (*MyVPSResult, error) {
+	if input.TelegramID <= 0 {
+		return nil, ErrInvalidTelegramUser
+	}
+
+	user, err := s.repo.FindUserByTelegramID(ctx, input.TelegramID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTelegramUserNotFound
+		}
+
+		return nil, err
+	}
+
+	instances, err := s.repo.FindUserServiceInstances(ctx, user.TelegramID)
+	if err != nil {
+		return nil, err
+	}
+
+	liveMap := s.fetchMyVPSLiveStatuses(instances)
+	result := &MyVPSResult{
+		Items: make([]MyVPSItem, 0, len(instances)),
+	}
+
+	for i := range instances {
+		result.Items = append(result.Items, buildMyVPSItem(&instances[i], liveMap))
+	}
+
+	return result, nil
+}
+
+func (s *Service) MyVPSDetail(ctx context.Context, input MyVPSDetailInput) (*MyVPSDetailResult, error) {
+	if input.TelegramID <= 0 || strings.TrimSpace(input.ContainerID) == "" {
+		return nil, ErrInvalidTelegramUser
+	}
+
+	instance, err := s.repo.FindUserServiceInstanceByID(ctx, input.TelegramID, input.ContainerID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrMyVPSNotFound
+		}
+
+		return nil, err
+	}
+
+	result := &MyVPSDetailResult{
+		ContainerID:       instance.ID,
+		ServiceID:         instance.ServiceID,
+		IncusInstanceName: instance.IncusInstanceName,
+		ImageAlias:        instance.ImageAlias,
+		OSFamily:          instance.OSFamily,
+		InternalIP:        instance.InternalIP,
+		MainPublicIP:      instance.MainPublicIP,
+		SSHPort:           instance.SSHPort,
+		Status:            instance.Status,
+		CreatedAt:         instance.CreatedAt,
+		UpdatedAt:         instance.UpdatedAt,
+		Live: MyVPSLiveDetail{
+			Available: false,
+			ResourceUse: MyVPSUsage{
+				CPU:    MyVPSCPUUsage{},
+				Memory: MyVPSMemoryUsage{},
+				Disk:   MyVPSDiskUsage{},
+			},
+		},
+	}
+
+	if instance.Service != nil {
+		result.PackageName = instance.Service.PackageNameSnapshot
+		result.ServiceStatus = instance.Service.Status
+		result.CPULimit = instance.Service.CPUSnapshot
+		result.RAMMBLimit = instance.Service.RAMMBSnapshot
+		result.DiskGBLimit = instance.Service.DiskGBSnapshot
+		result.Price = instance.Service.PriceSnapshot
+		result.ExpiresAt = instance.Service.ExpiresAt
+		result.RemainingDays = remainingDays(instance.Service.ExpiresAt)
+	}
+
+	if s.incus == nil || s.incus.Server() == nil {
+		result.Live.Error = stringPointer("incus client is not configured")
+		return result, nil
+	}
+
+	live, _, err := s.incus.Server().GetInstanceFull(instance.IncusInstanceName)
+	if err != nil {
+		result.Live.Error = stringPointer(err.Error())
+		return result, nil
+	}
+
+	result.Status = normalizeStatus(live.Status, result.Status)
+	result.Live.Available = true
+	result.Live.Status = live.Status
+	result.Live.StatusCode = int(live.StatusCode)
+
+	if live.State != nil {
+		result.Live.ResourceUse = buildMyVPSUsage(live.State)
+
+		if !live.State.StartedAt.IsZero() {
+			uptimeSeconds := int64(time.Since(live.State.StartedAt).Seconds())
+			result.UptimeSeconds = &uptimeSeconds
+			human := humanizeDuration(time.Duration(uptimeSeconds) * time.Second)
+			result.UptimeHuman = &human
+		}
+	}
+
+	return result, nil
+}
+
 func resolveDisplayName(displayName string, firstName *string, lastName *string, username *string) string {
 	if trimmed := strings.TrimSpace(displayName); trimmed != "" {
 		return trimmed
@@ -360,4 +559,162 @@ func defaultPlatform() HomePlatform {
 		Virtualization: "Incus Container",
 		AccessMethod:   "SSH",
 	}
+}
+
+func fetchStatusMap(instances []model.ServiceInstance, fullInstances []api.InstanceFull) map[string]api.InstanceFull {
+	result := make(map[string]api.InstanceFull, len(instances))
+	if len(fullInstances) == 0 {
+		return result
+	}
+
+	fullMap := make(map[string]api.InstanceFull, len(fullInstances))
+	for i := range fullInstances {
+		fullMap[fullInstances[i].Name] = fullInstances[i]
+	}
+
+	for i := range instances {
+		if live, ok := fullMap[instances[i].IncusInstanceName]; ok {
+			result[instances[i].IncusInstanceName] = live
+		}
+	}
+
+	return result
+}
+
+func (s *Service) fetchMyVPSLiveStatuses(instances []model.ServiceInstance) map[string]api.InstanceFull {
+	if s.incus == nil || s.incus.Server() == nil || len(instances) == 0 {
+		return map[string]api.InstanceFull{}
+	}
+
+	fullInstances, err := s.incus.Server().GetInstancesFull(api.InstanceTypeContainer)
+	if err != nil {
+		return map[string]api.InstanceFull{}
+	}
+
+	return fetchStatusMap(instances, fullInstances)
+}
+
+func buildMyVPSItem(instance *model.ServiceInstance, liveMap map[string]api.InstanceFull) MyVPSItem {
+	item := MyVPSItem{
+		ContainerID:       instance.ID,
+		ServiceID:         instance.ServiceID,
+		IncusInstanceName: instance.IncusInstanceName,
+		Status:            instance.Status,
+		CreatedAt:         instance.CreatedAt,
+	}
+
+	if instance.Service != nil {
+		item.PackageName = instance.Service.PackageNameSnapshot
+		item.ServiceStatus = instance.Service.Status
+		item.ExpiresAt = instance.Service.ExpiresAt
+		item.RemainingDays = remainingDays(instance.Service.ExpiresAt)
+	}
+
+	if live, ok := liveMap[instance.IncusInstanceName]; ok {
+		item.Status = normalizeStatus(live.Status, item.Status)
+		item.LiveAvailable = true
+	}
+
+	return item
+}
+
+func buildMyVPSUsage(state *api.InstanceState) MyVPSUsage {
+	return MyVPSUsage{
+		CPU: MyVPSCPUUsage{
+			UsageNS: state.CPU.Usage,
+		},
+		Memory: MyVPSMemoryUsage{
+			UsageBytes:   state.Memory.Usage,
+			TotalBytes:   state.Memory.Total,
+			UsagePercent: percentage(state.Memory.Usage, state.Memory.Total),
+		},
+		Disk: buildMyVPSDiskUsage(state.Disk),
+	}
+}
+
+func buildMyVPSDiskUsage(disks map[string]api.InstanceStateDisk) MyVPSDiskUsage {
+	if disk, ok := disks["root"]; ok {
+		return MyVPSDiskUsage{
+			UsageBytes:   disk.Usage,
+			TotalBytes:   disk.Total,
+			UsagePercent: percentage(disk.Usage, disk.Total),
+		}
+	}
+
+	var usage int64
+	var total int64
+	for _, disk := range disks {
+		usage += disk.Usage
+		total += disk.Total
+	}
+
+	return MyVPSDiskUsage{
+		UsageBytes:   usage,
+		TotalBytes:   total,
+		UsagePercent: percentage(usage, total),
+	}
+}
+
+func remainingDays(expiresAt *time.Time) *int {
+	if expiresAt == nil {
+		return nil
+	}
+
+	if expiresAt.IsZero() {
+		return nil
+	}
+
+	remaining := int(time.Until(*expiresAt).Hours() / 24)
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	return &remaining
+}
+
+func percentage(usage int64, total int64) *float64 {
+	if total <= 0 {
+		return nil
+	}
+
+	value := (float64(usage) / float64(total)) * 100
+	return &value
+}
+
+func normalizeStatus(liveStatus string, fallback string) string {
+	if strings.TrimSpace(liveStatus) == "" {
+		return fallback
+	}
+
+	return strings.ToLower(strings.TrimSpace(liveStatus))
+}
+
+func humanizeDuration(duration time.Duration) string {
+	if duration <= 0 {
+		return "0m"
+	}
+
+	days := int(duration.Hours()) / 24
+	hours := int(duration.Hours()) % 24
+	minutes := int(duration.Minutes()) % 60
+
+	parts := []string{}
+	if days > 0 {
+		parts = append(parts, fmt.Sprintf("%dhari", days))
+	}
+	if hours > 0 {
+		parts = append(parts, fmt.Sprintf("%djam", hours))
+	}
+	if minutes > 0 && days == 0 {
+		parts = append(parts, fmt.Sprintf("%dmenit", minutes))
+	}
+	if len(parts) == 0 {
+		return "0m"
+	}
+
+	return strings.Join(parts, " ")
+}
+
+func stringPointer(value string) *string {
+	return &value
 }

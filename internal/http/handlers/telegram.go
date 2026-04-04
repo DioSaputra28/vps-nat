@@ -32,6 +32,15 @@ type telegramBuyVPSRequest struct {
 	TelegramID int64 `json:"telegram_id" binding:"required"`
 }
 
+type telegramMyVPSRequest struct {
+	TelegramID int64 `json:"telegram_id" binding:"required"`
+}
+
+type telegramMyVPSDetailRequest struct {
+	TelegramID  int64  `json:"telegram_id" binding:"required"`
+	ContainerID string `json:"container_id" binding:"required"`
+}
+
 func NewTelegramHandler(service *telegram.Service, botSecret string) TelegramHandler {
 	return TelegramHandler{
 		service:   service,
@@ -159,6 +168,67 @@ func (h TelegramHandler) BuyVPS(c *gin.Context) {
 		"wallet":   result.Wallet,
 		"packages": result.Packages,
 	})
+}
+
+func (h TelegramHandler) MyVPS(c *gin.Context) {
+	if !h.authorize(c) {
+		return
+	}
+
+	var req telegramMyVPSRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, http.StatusBadRequest, "invalid request body", "bad_request", nil)
+		return
+	}
+
+	result, err := h.service.MyVPS(c.Request.Context(), telegram.MyVPSInput{
+		TelegramID: req.TelegramID,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, telegram.ErrInvalidTelegramUser):
+			response.Fail(c, http.StatusBadRequest, "invalid telegram user data", "bad_request", nil)
+		case errors.Is(err, telegram.ErrTelegramUserNotFound):
+			response.Fail(c, http.StatusNotFound, "telegram user not found", "not_found", nil)
+		default:
+			response.Fail(c, http.StatusInternalServerError, "failed to fetch telegram my vps data", "internal_server_error", nil)
+		}
+		return
+	}
+
+	response.Success(c, http.StatusOK, "telegram my vps data fetched successfully", gin.H{
+		"items": result.Items,
+	})
+}
+
+func (h TelegramHandler) MyVPSDetail(c *gin.Context) {
+	if !h.authorize(c) {
+		return
+	}
+
+	var req telegramMyVPSDetailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, http.StatusBadRequest, "invalid request body", "bad_request", nil)
+		return
+	}
+
+	result, err := h.service.MyVPSDetail(c.Request.Context(), telegram.MyVPSDetailInput{
+		TelegramID:  req.TelegramID,
+		ContainerID: req.ContainerID,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, telegram.ErrInvalidTelegramUser):
+			response.Fail(c, http.StatusBadRequest, "invalid telegram user data", "bad_request", nil)
+		case errors.Is(err, telegram.ErrMyVPSNotFound):
+			response.Fail(c, http.StatusNotFound, "telegram my vps not found", "not_found", nil)
+		default:
+			response.Fail(c, http.StatusInternalServerError, "failed to fetch telegram my vps detail", "internal_server_error", nil)
+		}
+		return
+	}
+
+	response.Success(c, http.StatusOK, "telegram my vps detail fetched successfully", result)
 }
 
 func (h TelegramHandler) authorize(c *gin.Context) bool {
