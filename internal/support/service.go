@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/DioSaputra28/vps-nat/internal/activitylog"
 	"github.com/DioSaputra28/vps-nat/internal/model"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -221,7 +222,30 @@ func (s *Service) ReplyFromAdmin(ctx context.Context, input ReplyFromAdminInput)
 		Message:    normalizeMessage(input.Message),
 		CreatedAt:  now,
 	}
-	if err := s.repo.AddMessage(ctx, ticket.ID, message, updates); err != nil {
+	if err := s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if len(updates) > 0 {
+			if err := tx.Model(&model.SupportTicket{}).
+				Where("id = ?", ticket.ID).
+				Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Create(message).Error; err != nil {
+			return err
+		}
+		return activitylog.Write(ctx, tx, activitylog.Entry{
+			ActorType:  "admin",
+			ActorID:    &input.Admin.ID,
+			Action:     "support.ticket_replied",
+			TargetType: "support_ticket",
+			TargetID:   &ticket.ID,
+			Metadata: map[string]any{
+				"status":  nextStatus,
+				"message": message.Message,
+			},
+			CreatedAt: now,
+		})
+	}); err != nil {
 		return nil, err
 	}
 	ticket.Status = nextStatus
@@ -254,7 +278,24 @@ func (s *Service) UpdateStatus(ctx context.Context, input UpdateStatusInput) (*m
 		updates["closed_at"] = nil
 		ticket.ClosedAt = nil
 	}
-	if err := s.repo.UpdateTicketStatus(ctx, ticket.ID, updates); err != nil {
+	if err := s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.SupportTicket{}).
+			Where("id = ?", ticket.ID).
+			Updates(updates).Error; err != nil {
+			return err
+		}
+		return activitylog.Write(ctx, tx, activitylog.Entry{
+			ActorType:  "admin",
+			ActorID:    &input.Admin.ID,
+			Action:     "support.ticket_status_updated",
+			TargetType: "support_ticket",
+			TargetID:   &ticket.ID,
+			Metadata: map[string]any{
+				"status": status,
+			},
+			CreatedAt: now,
+		})
+	}); err != nil {
 		return nil, err
 	}
 	ticket.Status = status

@@ -173,12 +173,15 @@ type DomainPreviewInput struct {
 }
 
 type DomainPreviewResult struct {
-	ContainerID string `json:"container_id"`
-	ServiceID   string `json:"service_id"`
-	Domain      string `json:"domain"`
-	TargetPort  int    `json:"target_port"`
-	ProxyMode   string `json:"proxy_mode"`
-	Available   bool   `json:"available"`
+	ContainerID      string  `json:"container_id"`
+	ServiceID        string  `json:"service_id"`
+	Domain           string  `json:"domain"`
+	TargetPort       int     `json:"target_port"`
+	ProxyMode        string  `json:"proxy_mode"`
+	Available        bool    `json:"available"`
+	ExpectedPublicIP *string `json:"expected_public_ip,omitempty"`
+	DNSReady         bool    `json:"dns_ready"`
+	UpstreamTarget   string  `json:"upstream_target"`
 }
 
 type DomainSubmitInput struct {
@@ -193,8 +196,18 @@ type DomainSubmitResult struct {
 	ContainerID string              `json:"container_id"`
 	ServiceID   string              `json:"service_id"`
 	Domain      model.ServiceDomain `json:"domain"`
-	JobID       string              `json:"job_id"`
 	Status      string              `json:"status"`
+}
+
+type ReconfigPortMapping struct {
+	MappingType string  `json:"mapping_type"`
+	PublicIP    string  `json:"public_ip"`
+	PublicPort  int     `json:"public_port"`
+	Protocol    string  `json:"protocol"`
+	TargetIP    string  `json:"target_ip"`
+	TargetPort  int     `json:"target_port"`
+	Description *string `json:"description,omitempty"`
+	IsActive    bool    `json:"is_active"`
 }
 
 type ReconfigIPPreviewInput struct {
@@ -203,11 +216,13 @@ type ReconfigIPPreviewInput struct {
 }
 
 type ReconfigIPPreviewResult struct {
-	ContainerID     string  `json:"container_id"`
-	ServiceID       string  `json:"service_id"`
-	MainPublicIP    *string `json:"main_public_ip,omitempty"`
-	CurrentSSHPort  *int    `json:"current_ssh_port,omitempty"`
-	ProposedSSHPort int     `json:"proposed_ssh_port"`
+	ContainerID      string                `json:"container_id"`
+	ServiceID        string                `json:"service_id"`
+	MainPublicIP     *string               `json:"main_public_ip,omitempty"`
+	CurrentSSHPort   *int                  `json:"current_ssh_port,omitempty"`
+	ProposedSSHPort  int                   `json:"proposed_ssh_port"`
+	CurrentMappings  []ReconfigPortMapping `json:"current_mappings"`
+	ProposedMappings []ReconfigPortMapping `json:"proposed_mappings"`
 }
 
 type ReconfigIPSubmitInput struct {
@@ -218,8 +233,9 @@ type ReconfigIPSubmitInput struct {
 
 type ReconfigIPSubmitResult struct {
 	ActionAcceptedResult
-	MainPublicIP *string `json:"main_public_ip,omitempty"`
-	SSHPort      *int    `json:"ssh_port,omitempty"`
+	MainPublicIP *string               `json:"main_public_ip,omitempty"`
+	SSHPort      *int                  `json:"ssh_port,omitempty"`
+	PortMappings []ReconfigPortMapping `json:"port_mappings"`
 }
 
 type TransferPreviewInput struct {

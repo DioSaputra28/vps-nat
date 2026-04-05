@@ -72,7 +72,7 @@ func (h ContainerHandler) Stop(c *gin.Context) {
 }
 
 func (h ContainerHandler) Suspend(c *gin.Context) {
-	h.handleAction(c, "suspend", "container suspended successfully")
+	h.handleAction(c, "suspend", "container stopped successfully")
 }
 
 func (h ContainerHandler) handleAction(c *gin.Context, action string, message string) {

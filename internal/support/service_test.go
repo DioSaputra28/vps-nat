@@ -99,6 +99,14 @@ func TestReplyFromAdminMovesTicketToInProgress(t *testing.T) {
 	if result.Messages[len(result.Messages)-1].SenderType != "admin" {
 		t.Fatalf("expected last sender admin, got %s", result.Messages[len(result.Messages)-1].SenderType)
 	}
+
+	var logs int64
+	if err := db.Model(&model.ActivityLog{}).Where("action = ?", "support.ticket_replied").Count(&logs).Error; err != nil {
+		t.Fatalf("failed counting activity logs: %v", err)
+	}
+	if logs != 1 {
+		t.Fatalf("expected 1 support reply activity log, got %d", logs)
+	}
 }
 
 func TestUpdateStatusClosesTicketAndSetsClosedAt(t *testing.T) {
@@ -125,6 +133,14 @@ func TestUpdateStatusClosesTicketAndSetsClosedAt(t *testing.T) {
 	}
 	if result.ClosedAt == nil {
 		t.Fatalf("expected closed_at to be set")
+	}
+
+	var logs int64
+	if err := db.Model(&model.ActivityLog{}).Where("action = ?", "support.ticket_status_updated").Count(&logs).Error; err != nil {
+		t.Fatalf("failed counting activity logs: %v", err)
+	}
+	if logs != 1 {
+		t.Fatalf("expected 1 support status activity log, got %d", logs)
 	}
 }
 
@@ -170,6 +186,7 @@ func newSupportServiceTestHarness(t *testing.T) (*Service, *gorm.DB) {
 		&model.AdminUser{},
 		&model.SupportTicket{},
 		&model.SupportTicketMessage{},
+		&model.ActivityLog{},
 	); err != nil {
 		t.Fatalf("failed to migrate sqlite schema: %v", err)
 	}

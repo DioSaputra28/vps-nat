@@ -544,11 +544,11 @@ func (h TelegramHandler) writeActionError(c *gin.Context, err error, fallback st
 		response.Fail(c, http.StatusBadRequest, err.Error(), "bad_request", nil)
 	case errors.Is(err, telegram.ErrTelegramUserNotFound), errors.Is(err, telegram.ErrMyVPSNotFound), errors.Is(err, telegram.ErrUpgradePackageNotFound), errors.Is(err, telegram.ErrTransferTargetNotFound):
 		response.Fail(c, http.StatusNotFound, err.Error(), "not_found", nil)
-	case errors.Is(err, telegram.ErrInsufficientBalance), errors.Is(err, telegram.ErrUpgradePackageIneligible), errors.Is(err, telegram.ErrTransferTargetSame), errors.Is(err, telegram.ErrDomainAlreadyExists), errors.Is(err, telegram.ErrActionConflict), errors.Is(err, telegram.ErrContainerNotRunning), errors.Is(err, telegram.ErrServiceNotOperable), errors.Is(err, telegram.ErrNoActiveSSHMapping):
+	case errors.Is(err, telegram.ErrInsufficientBalance), errors.Is(err, telegram.ErrUpgradePackageIneligible), errors.Is(err, telegram.ErrTransferTargetSame), errors.Is(err, telegram.ErrDomainAlreadyExists), errors.Is(err, telegram.ErrActionConflict), errors.Is(err, telegram.ErrContainerNotRunning), errors.Is(err, telegram.ErrServiceNotOperable), errors.Is(err, telegram.ErrNoActiveSSHMapping), errors.Is(err, telegram.ErrDomainDNSMismatch):
 		response.Fail(c, http.StatusConflict, err.Error(), "conflict", nil)
 	case errors.Is(err, telegram.ErrUnsupportedPayment), errors.Is(err, telegram.ErrInvalidDomain):
 		response.Fail(c, http.StatusBadRequest, err.Error(), "bad_request", nil)
-	case errors.Is(err, telegram.ErrIncusUnavailable):
+	case errors.Is(err, telegram.ErrIncusUnavailable), errors.Is(err, telegram.ErrReverseProxyUnavailable):
 		response.Fail(c, http.StatusServiceUnavailable, err.Error(), "service_unavailable", nil)
 	default:
 		response.Fail(c, http.StatusInternalServerError, fallback, "internal_server_error", nil)

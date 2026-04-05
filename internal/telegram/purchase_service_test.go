@@ -252,6 +252,55 @@ func TestHandlePakasirWebhookVerifiedPaymentProvisionsOrder(t *testing.T) {
 	if service.Status != "active" {
 		t.Fatalf("expected service active, got %s", service.Status)
 	}
+
+	var logs int64
+	if err := db.Model(&model.ActivityLog{}).Where("action = ?", "purchase.provisioned").Count(&logs).Error; err != nil {
+		t.Fatalf("failed counting activity logs: %v", err)
+	}
+	if logs != 1 {
+		t.Fatalf("expected 1 purchase.provisioned activity log, got %d", logs)
+	}
+}
+
+func TestHandlePakasirWebhookCreditsWalletTopupAndWritesActivityLog(t *testing.T) {
+	t.Parallel()
+
+	svc, db := newPurchaseServiceTestHarness(t)
+	svc.paymentGateway = fakePurchasePaymentGateway{
+		verifyQrisFn: func(_ context.Context, req PakasirVerifyTransactionRequest) (*PakasirVerifiedTransaction, error) {
+			return &PakasirVerifiedTransaction{
+				OrderID:       req.OrderID,
+				Amount:        req.Amount,
+				Status:        "completed",
+				PaymentMethod: "qris",
+				CompletedAt:   time.Now().UTC(),
+			}, nil
+		},
+	}
+
+	seedPurchaseUser(t, db, 7004, "user-4", "wallet-4", 1000)
+	topupID, _ := seedPendingWalletTopup(t, db, pendingWalletTopupSeedInput{
+		userID: "user-4",
+		amount: 5000,
+	})
+
+	if err := svc.HandlePakasirWebhook(context.Background(), PakasirWebhookInput{
+		Amount:        5000,
+		OrderID:       topupID,
+		Project:       "project-slug",
+		Status:        "completed",
+		PaymentMethod: "qris",
+	}); err != nil {
+		t.Fatalf("HandlePakasirWebhook returned error: %v", err)
+	}
+
+	var logs int64
+	if err := db.Model(&model.ActivityLog{}).Where("action = ?", "wallet_topup.paid").Count(&logs).Error; err != nil {
+		t.Fatalf("failed counting activity logs: %v", err)
+	}
+	if logs != 1 {
+		t.Fatalf("expected 1 wallet_topup.paid activity log, got %d", logs)
+	}
 }
 
 func TestBuyVPSStatusReturnsActiveAccessPayload(t *testing.T) {
@@ -511,6 +560,7 @@ func newPurchaseServiceTestHarness(t *testing.T) (*Service, *gorm.DB) {
 		&model.ProvisioningJob{},
 		&model.ServiceEvent{},
 		&model.WalletTransaction{},
+		&model.ActivityLog{},
 	); err != nil {
 		t.Fatalf("failed to migrate sqlite schema: %v", err)
 	}

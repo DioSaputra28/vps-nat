@@ -748,6 +748,7 @@ func newActionServiceTestHarness(t *testing.T) (*Service, *gorm.DB) {
 		&model.ServiceEvent{},
 		&model.ServiceTransfer{},
 		&model.WalletTransaction{},
+		&model.ActivityLog{},
 	); err != nil {
 		t.Fatalf("failed to migrate sqlite schema: %v", err)
 	}

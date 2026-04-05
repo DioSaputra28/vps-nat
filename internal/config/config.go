@@ -19,6 +19,7 @@ type Config struct {
 	Pakasir  PakasirConfig
 	Alerts   AlertConfig
 	Incus    IncusConfig
+	Caddy    CaddyConfig
 }
 
 type AppConfig struct {
@@ -79,6 +80,11 @@ type IncusConfig struct {
 	InsecureSkipVerify bool
 }
 
+type CaddyConfig struct {
+	AdminURL string
+	APIToken string
+}
+
 func Load() (Config, error) {
 	_ = godotenv.Load()
 
@@ -132,6 +138,10 @@ func Load() (Config, error) {
 			TLSCAPath:          os.Getenv("INCUS_TLS_CA_PATH"),
 			TLSServerCertPath:  os.Getenv("INCUS_TLS_SERVER_CERT_PATH"),
 			InsecureSkipVerify: getEnvBool("INCUS_TLS_INSECURE_SKIP_VERIFY", false),
+		},
+		Caddy: CaddyConfig{
+			AdminURL: os.Getenv("CADDY_ADMIN_URL"),
+			APIToken: os.Getenv("CADDY_ADMIN_API_TOKEN"),
 		},
 	}
 

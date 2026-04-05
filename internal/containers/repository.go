@@ -3,7 +3,9 @@ package containers
 import (
 	"context"
 	"strings"
+	"time"
 
+	"github.com/DioSaputra28/vps-nat/internal/activitylog"
 	"github.com/DioSaputra28/vps-nat/internal/model"
 	"gorm.io/gorm"
 )
@@ -101,7 +103,27 @@ func (r *Repository) SaveActionResult(ctx context.Context, instance *model.Servi
 			return err
 		}
 
-		return nil
+		action, _ := job.Payload["action"].(string)
+		if strings.TrimSpace(action) == "" {
+			action = strings.TrimSpace(job.JobType)
+		}
+		if action == "" {
+			action = "unknown"
+		}
+		return activitylog.Write(ctx, tx, activitylog.Entry{
+			ActorType:  "admin",
+			ActorID:    job.RequestedByID,
+			Action:     "container." + action,
+			TargetType: "service_instance",
+			TargetID:   &instance.ID,
+			Metadata: map[string]any{
+				"service_id":         instance.ServiceID,
+				"operation_id":       instance.LastIncusOperationID,
+				"incus_instance_name": instance.IncusInstanceName,
+				"status":             instance.Status,
+			},
+			CreatedAt: instance.UpdatedAt,
+		})
 	})
 }
 
@@ -127,8 +149,27 @@ func (r *Repository) SaveFailedAction(ctx context.Context, instance *model.Servi
 		if err := tx.Create(event).Error; err != nil {
 			return err
 		}
-
-		return nil
+		action, _ := job.Payload["action"].(string)
+		if strings.TrimSpace(action) == "" {
+			action = strings.TrimSpace(job.JobType)
+		}
+		if action == "" {
+			action = "unknown"
+		}
+		return activitylog.Write(ctx, tx, activitylog.Entry{
+			ActorType:  "admin",
+			ActorID:    job.RequestedByID,
+			Action:     "container." + action + ".failed",
+			TargetType: "service_instance",
+			TargetID:   &instance.ID,
+			Metadata: map[string]any{
+				"service_id":          instance.ServiceID,
+				"operation_id":        instance.LastIncusOperationID,
+				"incus_instance_name": instance.IncusInstanceName,
+				"error":               job.ErrorMessage,
+			},
+			CreatedAt: time.Now().UTC(),
+		})
 	})
 }
 

@@ -158,6 +158,18 @@ func (r *Repository) FindNextAvailablePublicPort(ctx context.Context, publicIP s
 	return 0, gorm.ErrRecordNotFound
 }
 
+func (r *Repository) IsPublicPortAvailable(ctx context.Context, publicIP string, protocol string, port int) (bool, error) {
+	var count int64
+	if err := r.db.WithContext(ctx).
+		Model(&model.ServicePortMapping{}).
+		Where("public_ip = ? AND protocol = ? AND public_port = ? AND is_active = ?", publicIP, protocol, port, true).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+
+	return count == 0, nil
+}
+
 func (r *Repository) UpdatePaymentProviderPayload(ctx context.Context, paymentID string, payload map[string]any) error {
 	return r.db.WithContext(ctx).
 		Model(&model.Payment{}).

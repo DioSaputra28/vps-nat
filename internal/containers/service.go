@@ -252,6 +252,7 @@ func (s *Service) Act(ctx context.Context, input ActionInput) (*ActionResult, er
 		return nil, ErrUnsupportedAction
 	}
 	incusAction := requestedToIncusAction(requestedAction)
+	logAction := actionLogAction(requestedAction)
 
 	if s.incus == nil || s.incus.Server() == nil {
 		return nil, ErrIncusUnavailable
@@ -277,7 +278,7 @@ func (s *Service) Act(ctx context.Context, input ActionInput) (*ActionResult, er
 	if err := op.Wait(); err != nil {
 		now := time.Now().UTC()
 		instance.LastIncusOperationID = &operationID
-		job := failedActionJob(instance, input.Admin, requestedAction, operationID, err, now)
+		job := failedActionJob(instance, input.Admin, logAction, operationID, err, now)
 		event := failedActionEvent(instance, input.Admin, requestedAction, operationID, err, now)
 		_ = s.repo.SaveFailedAction(ctx, instance, job, event)
 		return nil, fmt.Errorf("%w: %v", ErrContainerAction, err)
@@ -306,7 +307,7 @@ func (s *Service) Act(ctx context.Context, input ActionInput) (*ActionResult, er
 		RequestedByID:    &input.Admin.ID,
 		AttemptCount:     1,
 		Payload: map[string]any{
-			"action":              requestedAction,
+			"action":              logAction,
 			"incus_action":        incusAction,
 			"container_id":        instance.ID,
 			"incus_instance_name": instance.IncusInstanceName,
@@ -346,7 +347,7 @@ func (s *Service) Act(ctx context.Context, input ActionInput) (*ActionResult, er
 	return &ActionResult{
 		Container:   *detail,
 		OperationID: operationID,
-		Action:      requestedAction,
+		Action:      logAction,
 	}, nil
 }
 
@@ -409,7 +410,7 @@ func toContainerSummary(instance *model.ServiceInstance, liveMap map[string]api.
 		InternalIP:        instance.InternalIP,
 		MainPublicIP:      instance.MainPublicIP,
 		SSHPort:           instance.SSHPort,
-		Status:            instance.Status,
+		Status:            normalizeLegacyStatus(instance.Status),
 		CreatedAt:         instance.CreatedAt,
 		UpdatedAt:         instance.UpdatedAt,
 	}
@@ -420,7 +421,7 @@ func toContainerSummary(instance *model.ServiceInstance, liveMap map[string]api.
 	}
 
 	if instance.Service != nil {
-		summary.ServiceStatus = instance.Service.Status
+		summary.ServiceStatus = normalizeLegacyStatus(instance.Service.Status)
 		summary.PackageName = instance.Service.PackageNameSnapshot
 		summary.CPU = instance.Service.CPUSnapshot
 		summary.RAMMB = instance.Service.RAMMBSnapshot
@@ -544,7 +545,7 @@ func normalizeRequestedAction(action string) string {
 
 func requestedToIncusAction(action string) string {
 	if action == "suspend" {
-		return "freeze"
+		return "stop"
 	}
 
 	return action
@@ -557,7 +558,7 @@ func statusAfterAction(action string, now time.Time) (string, string, *time.Time
 	case "stop":
 		return "stopped", "stopped", nil
 	case "suspend":
-		return "suspended", "suspended", &now
+		return "stopped", "stopped", nil
 	default:
 		return "failed", "failed", nil
 	}
@@ -583,10 +584,17 @@ func actionToEventType(action string) string {
 	case "stop":
 		return "container_stopped"
 	case "suspend":
-		return "container_suspended"
+		return "container_stopped"
 	default:
 		return "container_action"
 	}
+}
+
+func actionLogAction(action string) string {
+	if action == "suspend" {
+		return "stop"
+	}
+	return action
 }
 
 func actionSummary(action string, instanceName string) string {
@@ -596,7 +604,7 @@ func actionSummary(action string, instanceName string) string {
 	case "stop":
 		return fmt.Sprintf("Container %s stopped", instanceName)
 	case "suspend":
-		return fmt.Sprintf("Container %s suspended", instanceName)
+		return fmt.Sprintf("Container %s stopped", instanceName)
 	default:
 		return fmt.Sprintf("Container %s updated", instanceName)
 	}
@@ -604,6 +612,14 @@ func actionSummary(action string, instanceName string) string {
 
 func pointer(value string) *string {
 	return &value
+}
+
+func normalizeLegacyStatus(status string) string {
+	if strings.EqualFold(strings.TrimSpace(status), "suspended") {
+		return "stopped"
+	}
+
+	return status
 }
 
 func failedActionJob(instance *model.ServiceInstance, admin model.AdminUser, action string, operationID string, actionErr error, now time.Time) *model.ProvisioningJob {

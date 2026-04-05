@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DioSaputra28/vps-nat/internal/activitylog"
+	"github.com/DioSaputra28/vps-nat/internal/http/middleware"
 	"github.com/DioSaputra28/vps-nat/internal/model"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -73,7 +75,32 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*model.Package
 		UpdatedAt:    now,
 	}
 
-	if err := s.repo.Create(ctx, pkg); err != nil {
+	if err := s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(pkg).Error; err != nil {
+			return err
+		}
+		admin, ok := middleware.CurrentAdminFromContext(ctx)
+		if !ok {
+			return nil
+		}
+		return activitylog.Write(ctx, tx, activitylog.Entry{
+			ActorType:  "admin",
+			ActorID:    &admin.ID,
+			Action:     "package.created",
+			TargetType: "package",
+			TargetID:   &pkg.ID,
+			Metadata: map[string]any{
+				"name":          pkg.Name,
+				"cpu":           pkg.CPU,
+				"ram_mb":        pkg.RAMMB,
+				"disk_gb":       pkg.DiskGB,
+				"price":         pkg.Price,
+				"duration_days": pkg.DurationDays,
+				"is_active":     pkg.IsActive,
+			},
+			CreatedAt: now,
+		})
+	}); err != nil {
 		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			return nil, fmt.Errorf("%w: package name already exists", ErrInvalidPackageInput)
 		}
@@ -168,7 +195,25 @@ func (s *Service) Update(ctx context.Context, id string, input UpdateInput) (*mo
 		updates["is_active"] = *input.IsActive
 	}
 
-	if err := s.repo.Update(ctx, pkg, updates); err != nil {
+	updatedAt := updates["updated_at"].(time.Time)
+	if err := s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(pkg).Updates(updates).Error; err != nil {
+			return err
+		}
+		admin, ok := middleware.CurrentAdminFromContext(ctx)
+		if !ok {
+			return nil
+		}
+		return activitylog.Write(ctx, tx, activitylog.Entry{
+			ActorType:  "admin",
+			ActorID:    &admin.ID,
+			Action:     "package.updated",
+			TargetType: "package",
+			TargetID:   &pkg.ID,
+			Metadata:   updates,
+			CreatedAt:  updatedAt,
+		})
+	}); err != nil {
 		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			return nil, fmt.Errorf("%w: package name already exists", ErrInvalidPackageInput)
 		}
@@ -185,9 +230,29 @@ func (s *Service) Delete(ctx context.Context, id string) (*model.Package, error)
 		return nil, err
 	}
 
-	if err := s.repo.Update(ctx, pkg, map[string]any{
-		"is_active":  false,
-		"updated_at": time.Now().UTC(),
+	now := time.Now().UTC()
+	if err := s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(pkg).Updates(map[string]any{
+			"is_active":  false,
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		admin, ok := middleware.CurrentAdminFromContext(ctx)
+		if !ok {
+			return nil
+		}
+		return activitylog.Write(ctx, tx, activitylog.Entry{
+			ActorType:  "admin",
+			ActorID:    &admin.ID,
+			Action:     "package.deactivated",
+			TargetType: "package",
+			TargetID:   &pkg.ID,
+			Metadata: map[string]any{
+				"name": pkg.Name,
+			},
+			CreatedAt: now,
+		})
 	}); err != nil {
 		return nil, err
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DioSaputra28/vps-nat/internal/activitylog"
 	"github.com/DioSaputra28/vps-nat/internal/model"
 	telegramservice "github.com/DioSaputra28/vps-nat/internal/telegram/service"
 	"github.com/google/uuid"
@@ -487,7 +488,27 @@ func (s *Service) handlePakasirWalletTopupWebhook(ctx context.Context, input Pak
 			Update("balance", balanceAfter).Error; err != nil {
 			return err
 		}
-		return tx.Create(walletTxn).Error
+		if err := tx.Create(walletTxn).Error; err != nil {
+			return err
+		}
+		return activitylog.Write(ctx, tx, activitylog.Entry{
+			ActorType:  "system",
+			Action:     "wallet_topup.paid",
+			TargetType: "wallet_topup",
+			TargetID:   &topup.ID,
+			Metadata: map[string]any{
+				"user_id":         topup.User.ID,
+				"wallet_id":       topup.User.Wallet.ID,
+				"amount":          topup.Amount,
+				"payment_id":      payment.ID,
+				"balance_before":  balanceBefore,
+				"balance_after":   balanceAfter,
+				"payment_method":  "qris",
+				"completed_at":    now,
+				"provider_status": verified.Status,
+			},
+			CreatedAt: now,
+		})
 	})
 }
 
@@ -848,7 +869,26 @@ func (s *Service) persistPurchaseSuccess(ctx context.Context, input provisionPai
 		if err := tx.Create(job).Error; err != nil {
 			return err
 		}
-		return tx.Create(event).Error
+		if err := tx.Create(event).Error; err != nil {
+			return err
+		}
+		return activitylog.Write(ctx, tx, activitylog.Entry{
+			ActorType:  "system",
+			Action:     "purchase.provisioned",
+			TargetType: "order",
+			TargetID:   &input.Order.ID,
+			Metadata: map[string]any{
+				"service_id":     service.ID,
+				"container_id":   instance.ID,
+				"hostname":       input.Hostname,
+				"public_ip":      result.PublicIP,
+				"private_ip":     result.PrivateIP,
+				"attempts":       attempts,
+				"payment_id":     ptrStringValue(paymentIDFromModel(input.Payment)),
+				"payment_method": input.Payment.Method,
+			},
+			CreatedAt: now,
+		})
 	}); err != nil {
 		return nil, err
 	}
@@ -913,7 +953,24 @@ func (s *Service) persistPurchaseFailure(ctx context.Context, input provisionPai
 			}
 		}
 
-		return tx.Create(job).Error
+		if err := tx.Create(job).Error; err != nil {
+			return err
+		}
+		return activitylog.Write(ctx, tx, activitylog.Entry{
+			ActorType:  "system",
+			Action:     "purchase.provision_failed",
+			TargetType: "order",
+			TargetID:   &input.Order.ID,
+			Metadata: map[string]any{
+				"hostname":       input.Hostname,
+				"attempts":       attempts,
+				"error":          ptrStringValue(errMsg),
+				"payment_method": derefString(input.Order.PaymentMethod),
+				"total_amount":   input.Order.TotalAmount,
+				"refunded":       input.Wallet != nil,
+			},
+			CreatedAt: now,
+		})
 	})
 }
 
@@ -1106,6 +1163,20 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func ptrStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func paymentIDFromModel(payment *model.Payment) *string {
+	if payment == nil {
+		return nil
+	}
+	return &payment.ID
 }
 
 func derefInt(value *int) int {

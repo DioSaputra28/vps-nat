@@ -1,6 +1,7 @@
 package router
 
 import (
+	"github.com/DioSaputra28/vps-nat/internal/adminops"
 	"github.com/DioSaputra28/vps-nat/internal/auth"
 	"github.com/DioSaputra28/vps-nat/internal/config"
 	"github.com/DioSaputra28/vps-nat/internal/containers"
@@ -16,8 +17,9 @@ import (
 )
 
 type Dependencies struct {
-	DB    *gorm.DB
-	Incus *incusclient.Client
+	DB       *gorm.DB
+	Incus    *incusclient.Client
+	AdminOps *adminops.Service
 }
 
 func New(cfg config.Config, deps Dependencies) *gin.Engine {
@@ -39,12 +41,18 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	supportRepository := support.NewRepository(deps.DB)
 	supportService := support.NewService(supportRepository)
 	supportHandler := handlers.NewSupportHandler(supportService)
+	adminOpsHandler := handlers.NewAdminOpsHandler(deps.AdminOps)
 	telegramRepository := telegram.NewRepository(deps.DB)
 	telegramService := telegram.NewService(telegramRepository, deps.Incus)
 	telegramService.ConfigurePurchase(
 		telegram.NewIncusPurchaseProvisioner(deps.Incus, cfg.Incus.NetworkName),
 		telegram.NewPakasirGateway(cfg.Pakasir.BaseURL, cfg.Pakasir.ProjectSlug, cfg.Pakasir.APIKey),
 		telegram.NewTelegramAdminNotifier(cfg.Alerts.TelegramBotToken, cfg.Alerts.TelegramChatID),
+	)
+	telegramService.ConfigureInfra(
+		telegram.NewNetDNSResolver(),
+		telegram.NewCaddyReverseProxyClient(cfg.Caddy.AdminURL, cfg.Caddy.APIToken),
+		telegram.NewIncusNetworkForwardManager(deps.Incus, cfg.Incus.NetworkName),
 	)
 	telegramHandler := handlers.NewTelegramHandler(telegramService, supportService, cfg.Telegram.BotSecret)
 	paymentWebhookHandler := handlers.NewPaymentWebhookHandler(telegramService)
@@ -126,6 +134,28 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	supportRoutes.GET("/:id", supportHandler.GetByID)
 	supportRoutes.POST("/:id/messages", supportHandler.Reply)
 	supportRoutes.PATCH("/:id/status", supportHandler.UpdateStatus)
+
+	dashboardRoutes := router.Group("/dashboard")
+	dashboardRoutes.Use(adminAuthMiddleware.Require())
+	dashboardRoutes.GET("/overview", adminOpsHandler.DashboardOverview)
+
+	activityRoutes := router.Group("/activity-logs")
+	activityRoutes.Use(adminAuthMiddleware.Require())
+	activityRoutes.GET("", adminOpsHandler.ActivityLogList)
+
+	financeRoutes := router.Group("/finance")
+	financeRoutes.Use(adminAuthMiddleware.Require())
+	financeRoutes.GET("/summary", adminOpsHandler.FinanceSummary)
+	financeRoutes.GET("/server-costs", adminOpsHandler.ServerCostList)
+	financeRoutes.POST("/server-costs", adminOpsHandler.ServerCostCreate)
+
+	monitoringRoutes := router.Group("/monitoring")
+	monitoringRoutes.Use(adminAuthMiddleware.Require())
+	monitoringRoutes.GET("/alerts", adminOpsHandler.AlertList)
+
+	walletRoutes := router.Group("/wallet")
+	walletRoutes.Use(adminAuthMiddleware.Require())
+	walletRoutes.POST("/adjustments", adminOpsHandler.WalletAdjustment)
 
 	paymentRoutes := router.Group("/payments")
 	paymentRoutes.POST("/pakasir/webhook", paymentWebhookHandler.Pakasir)

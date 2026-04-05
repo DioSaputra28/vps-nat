@@ -1,12 +1,14 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"strings"
 	"time"
 
+	"github.com/DioSaputra28/vps-nat/internal/activitylog"
 	"github.com/DioSaputra28/vps-nat/internal/config"
 	"github.com/DioSaputra28/vps-nat/internal/model"
 	"github.com/google/uuid"
@@ -93,7 +95,26 @@ func (s *Service) Login(input LoginInput) (*LoginResult, error) {
 		}
 	}
 
-	if err := s.db.Create(&session).Error; err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&session).Error; err != nil {
+			return err
+		}
+
+		return activitylog.Write(context.Background(), tx, activitylog.Entry{
+			ActorType:  "admin",
+			ActorID:    &admin.ID,
+			Action:     "auth.login",
+			TargetType: "admin",
+			TargetID:   &admin.ID,
+			Metadata: map[string]any{
+				"session_id": session.ID,
+				"ip_address": session.IPAddress,
+				"user_agent": session.UserAgent,
+				"expires_at": session.ExpiresAt,
+			},
+			CreatedAt: now,
+		})
+	}); err != nil {
 		return nil, fmt.Errorf("create admin session: %w", err)
 	}
 
@@ -153,19 +174,32 @@ func (s *Service) Logout(token string) error {
 	}
 
 	now := time.Now().UTC()
-	result := s.db.Model(&model.AdminSession{}).
-		Where("token_hash = ? AND revoked_at IS NULL", HashSessionToken(token)).
-		Updates(map[string]any{
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var session model.AdminSession
+		if err := tx.Where("token_hash = ? AND revoked_at IS NULL", HashSessionToken(token)).First(&session).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrUnauthorized
+			}
+			return fmt.Errorf("revoke session: %w", err)
+		}
+
+		if err := tx.Model(&session).Updates(map[string]any{
 			"revoked_at": now,
 			"updated_at": now,
+		}).Error; err != nil {
+			return fmt.Errorf("revoke session: %w", err)
+		}
+
+		return activitylog.Write(context.Background(), tx, activitylog.Entry{
+			ActorType:  "admin",
+			ActorID:    &session.AdminUserID,
+			Action:     "auth.logout",
+			TargetType: "admin",
+			TargetID:   &session.AdminUserID,
+			Metadata: map[string]any{
+				"session_id": session.ID,
+			},
+			CreatedAt: now,
 		})
-	if result.Error != nil {
-		return fmt.Errorf("revoke session: %w", result.Error)
-	}
-
-	if result.RowsAffected == 0 {
-		return ErrUnauthorized
-	}
-
-	return nil
+	})
 }

@@ -27,6 +27,8 @@ var (
 	ErrTransferTargetSame       = errors.New("transfer target cannot be the same user")
 	ErrInvalidDomain            = errors.New("invalid domain")
 	ErrDomainAlreadyExists      = errors.New("domain already exists")
+	ErrDomainDNSMismatch        = errors.New("domain dns is not pointed to the expected public ip")
+	ErrReverseProxyUnavailable  = errors.New("reverse proxy is unavailable")
 	ErrServiceNotOperable       = errors.New("service is not operable")
 	ErrNoActiveSSHMapping       = errors.New("ssh mapping not found")
 	ErrPackageNotFound          = errors.New("package not found")
@@ -48,6 +50,9 @@ type Service struct {
 	purchaseProvisioner PurchaseProvisioner
 	paymentGateway      PaymentGateway
 	adminNotifier       AdminNotifier
+	dnsResolver         DNSResolver
+	reverseProxy        ReverseProxyClient
+	networkManager      NetworkForwardManager
 }
 
 type managedService struct {
@@ -66,6 +71,9 @@ func NewService(repo *Repository, incusClient *incus.Client) *Service {
 		purchaseProvisioner: nil,
 		paymentGateway:      nil,
 		adminNotifier:       nil,
+		dnsResolver:         NewNetDNSResolver(),
+		reverseProxy:        nil,
+		networkManager:      NewIncusNetworkForwardManager(incusClient, ""),
 	}
 }
 
@@ -73,6 +81,14 @@ func (s *Service) ConfigurePurchase(provisioner PurchaseProvisioner, gateway Pay
 	s.purchaseProvisioner = provisioner
 	s.paymentGateway = gateway
 	s.adminNotifier = notifier
+}
+
+func (s *Service) ConfigureInfra(resolver DNSResolver, reverseProxy ReverseProxyClient, networkManager NetworkForwardManager) {
+	if resolver != nil {
+		s.dnsResolver = resolver
+	}
+	s.reverseProxy = reverseProxy
+	s.networkManager = networkManager
 }
 
 func (s *Service) loadManagedService(ctx context.Context, telegramID int64, containerID string) (*managedService, error) {
