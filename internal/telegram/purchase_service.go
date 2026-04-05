@@ -165,6 +165,131 @@ func (s *Service) BuyVPSStatus(ctx context.Context, input BuyVPSStatusInput) (*B
 	return result, nil
 }
 
+func (s *Service) WalletTopupSubmit(ctx context.Context, input WalletTopupSubmitInput) (*WalletTopupSubmitResult, error) {
+	log.Printf("[wallet-topup][submit] telegram_id=%d amount=%d", input.TelegramID, input.Amount)
+	if input.TelegramID <= 0 {
+		return nil, ErrInvalidTelegramUser
+	}
+	if input.Amount <= 0 {
+		return nil, ErrInvalidActionRequest
+	}
+	if s.paymentGateway == nil {
+		return nil, ErrUnsupportedPayment
+	}
+
+	user, err := s.repo.FindUserByTelegramID(ctx, input.TelegramID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTelegramUserNotFound
+		}
+		return nil, err
+	}
+	if user.Wallet == nil {
+		return nil, ErrInvalidActionRequest
+	}
+
+	now := time.Now().UTC()
+	topup := model.WalletTopup{
+		ID:          uuid.NewString(),
+		UserID:      user.ID,
+		Status:      "pending",
+		Amount:      input.Amount,
+		RequestedAt: now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	transaction, err := s.paymentGateway.CreateQris(ctx, PakasirCreateTransactionRequest{
+		OrderID: topup.ID,
+		Amount:  input.Amount,
+		Method:  "qris",
+	})
+	if err != nil {
+		log.Printf("[wallet-topup][submit] create qris failed topup_id=%s: %v", topup.ID, err)
+		return nil, err
+	}
+
+	topup.ExpiredAt = &transaction.ExpiredAt
+	payment := telegramservice.BuildPayment(nil, "wallet_topup", "qris", input.Amount, now)
+	payment.WalletTopupID = &topup.ID
+	payment.Provider = strPtr("pakasir")
+	payment.ProviderRef = &topup.ID
+	payment.ProviderPayload = map[string]any{
+		"provider_data": transaction.Raw,
+		"fee":           transaction.Fee,
+		"total_payment": transaction.TotalPayment,
+		"qr_string":     transaction.QRString,
+	}
+	payment.ExpiredAt = &transaction.ExpiredAt
+	payment.Status = "pending"
+
+	if err := s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&topup).Error; err != nil {
+			return err
+		}
+		return tx.Create(&payment).Error
+	}); err != nil {
+		return nil, err
+	}
+
+	return &WalletTopupSubmitResult{
+		TopupID:   topup.ID,
+		PaymentID: payment.ID,
+		Status:    "awaiting_payment",
+		Payment: &BuyVPSPaymentPayload{
+			Provider:      transaction.Provider,
+			PaymentMethod: "qris",
+			Amount:        transaction.Amount,
+			Fee:           transaction.Fee,
+			TotalPayment:  transaction.TotalPayment,
+			QRString:      transaction.QRString,
+			ExpiredAt:     &transaction.ExpiredAt,
+		},
+	}, nil
+}
+
+func (s *Service) WalletTopupStatus(ctx context.Context, input WalletTopupStatusInput) (*WalletTopupStatusResult, error) {
+	log.Printf("[wallet-topup][status] telegram_id=%d topup_id=%s", input.TelegramID, input.TopupID)
+	if input.TelegramID <= 0 {
+		return nil, ErrInvalidTelegramUser
+	}
+	if strings.TrimSpace(input.TopupID) == "" {
+		return nil, ErrInvalidActionRequest
+	}
+
+	topup, err := s.repo.FindWalletTopupForUser(ctx, input.TelegramID, input.TopupID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrWalletTopupNotFound
+		}
+		return nil, err
+	}
+
+	payment := latestPayment(topup.Payments)
+	status := walletTopupStatus(topup, payment)
+	result := &WalletTopupStatusResult{
+		TopupID: input.TopupID,
+		Status:  status,
+		Amount:  topup.Amount,
+	}
+	if payment != nil {
+		result.Payment = paymentPayloadFromModel(payment)
+	}
+	if topup.Status == "paid" {
+		result.PaidAt = topup.CompletedAt
+		if topup.User != nil && topup.User.Wallet != nil {
+			balance := topup.User.Wallet.Balance
+			result.Balance = &balance
+		}
+	}
+	if topup.Status == "failed" || topup.Status == "expired" || topup.Status == "canceled" {
+		msg := "wallet topup failed"
+		result.Error = &msg
+	}
+
+	return result, nil
+}
+
 func (s *Service) HandlePakasirWebhook(ctx context.Context, input PakasirWebhookInput) error {
 	log.Printf("[purchase][webhook][pakasir] order_id=%s status=%s amount=%d method=%s", input.OrderID, input.Status, input.Amount, input.PaymentMethod)
 	if strings.TrimSpace(input.OrderID) == "" {
@@ -177,7 +302,7 @@ func (s *Service) HandlePakasirWebhook(ctx context.Context, input PakasirWebhook
 	order, err := s.repo.FindPurchaseOrderByID(ctx, input.OrderID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrOrderNotFound
+			return s.handlePakasirWalletTopupWebhook(ctx, input)
 		}
 		return err
 	}
@@ -272,6 +397,98 @@ func (s *Service) HandlePakasirWebhook(ctx context.Context, input PakasirWebhook
 		ActorID:    nil,
 	})
 	return err
+}
+
+func (s *Service) handlePakasirWalletTopupWebhook(ctx context.Context, input PakasirWebhookInput) error {
+	topup, err := s.repo.FindWalletTopupByID(ctx, input.OrderID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrOrderNotFound
+		}
+		return err
+	}
+	if topup.Status == "paid" || topup.Status == "failed" || topup.Status == "expired" || topup.Status == "canceled" {
+		return nil
+	}
+
+	payment := latestPayment(topup.Payments)
+	if payment == nil {
+		return ErrWalletTopupNotFound
+	}
+	if s.paymentGateway == nil {
+		return ErrPaymentVerification
+	}
+
+	verified, err := s.paymentGateway.VerifyTransaction(ctx, PakasirVerifyTransactionRequest{
+		OrderID: topup.ID,
+		Amount:  topup.Amount,
+	})
+	if err != nil {
+		log.Printf("[wallet-topup][webhook][pakasir] verification call failed topup_id=%s: %v", topup.ID, err)
+		return err
+	}
+	if !strings.EqualFold(verified.Status, "completed") || verified.Amount != topup.Amount || !strings.EqualFold(verified.PaymentMethod, "qris") {
+		log.Printf("[wallet-topup][webhook][pakasir] verification rejected topup_id=%s verified_status=%s verified_amount=%d verified_method=%s", topup.ID, verified.Status, verified.Amount, verified.PaymentMethod)
+		return ErrPaymentVerification
+	}
+
+	if topup.User == nil || topup.User.Wallet == nil {
+		return ErrInvalidActionRequest
+	}
+
+	now := time.Now().UTC()
+	payload := payment.ProviderPayload
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["verified_transaction"] = verified.Raw
+
+	balanceBefore := topup.User.Wallet.Balance
+	balanceAfter := balanceBefore + topup.Amount
+	sourceTopupID := topup.ID
+	note := "wallet topup payment"
+	walletTxn := &model.WalletTransaction{
+		ID:              uuid.NewString(),
+		WalletID:        topup.User.Wallet.ID,
+		UserID:          topup.User.ID,
+		Direction:       "credit",
+		TransactionType: "topup",
+		Amount:          topup.Amount,
+		BalanceBefore:   balanceBefore,
+		BalanceAfter:    balanceAfter,
+		SourceType:      "wallet_topup",
+		SourceID:        &sourceTopupID,
+		Note:            &note,
+		CreatedAt:       now,
+	}
+
+	return s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.WalletTopup{}).
+			Where("id = ?", topup.ID).
+			Updates(map[string]any{
+				"status":       "paid",
+				"completed_at": now,
+				"updated_at":   now,
+			}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Payment{}).
+			Where("id = ?", payment.ID).
+			Updates(&model.Payment{
+				Status:          "paid",
+				PaidAt:          &now,
+				ProviderPayload: payload,
+				UpdatedAt:       now,
+			}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Wallet{}).
+			Where("id = ?", topup.User.Wallet.ID).
+			Update("balance", balanceAfter).Error; err != nil {
+			return err
+		}
+		return tx.Create(walletTxn).Error
+	})
 }
 
 func (s *Service) submitWalletPurchase(ctx context.Context, user *model.User, pkg *model.Package, node *model.Node, hostname string, imageAlias string) (*BuyVPSSubmitResult, error) {
@@ -774,6 +991,29 @@ func paymentPayloadFromModel(payment *model.Payment) *BuyVPSPaymentPayload {
 		TotalPayment:  totalPayment,
 		QRString:      qrString,
 		ExpiredAt:     payment.ExpiredAt,
+	}
+}
+
+func walletTopupStatus(topup *model.WalletTopup, payment *model.Payment) string {
+	if topup == nil {
+		return "failed"
+	}
+	switch topup.Status {
+	case "paid":
+		return "paid"
+	case "failed":
+		return "failed"
+	case "expired":
+		return "expired"
+	case "canceled":
+		return "canceled"
+	case "pending":
+		if payment != nil && payment.Status == "pending" {
+			return "awaiting_payment"
+		}
+		return "pending"
+	default:
+		return topup.Status
 	}
 }
 

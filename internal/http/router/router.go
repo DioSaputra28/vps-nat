@@ -8,6 +8,7 @@ import (
 	"github.com/DioSaputra28/vps-nat/internal/http/middleware"
 	incusclient "github.com/DioSaputra28/vps-nat/internal/incus"
 	"github.com/DioSaputra28/vps-nat/internal/packages"
+	"github.com/DioSaputra28/vps-nat/internal/support"
 	"github.com/DioSaputra28/vps-nat/internal/telegram"
 	"github.com/DioSaputra28/vps-nat/internal/users"
 	"github.com/gin-gonic/gin"
@@ -35,6 +36,9 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	userRepository := users.NewRepository(deps.DB)
 	userService := users.NewService(userRepository)
 	userHandler := handlers.NewUserHandler(userService)
+	supportRepository := support.NewRepository(deps.DB)
+	supportService := support.NewService(supportRepository)
+	supportHandler := handlers.NewSupportHandler(supportService)
 	telegramRepository := telegram.NewRepository(deps.DB)
 	telegramService := telegram.NewService(telegramRepository, deps.Incus)
 	telegramService.ConfigurePurchase(
@@ -42,7 +46,7 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 		telegram.NewPakasirGateway(cfg.Pakasir.BaseURL, cfg.Pakasir.ProjectSlug, cfg.Pakasir.APIKey),
 		telegram.NewTelegramAdminNotifier(cfg.Alerts.TelegramBotToken, cfg.Alerts.TelegramChatID),
 	)
-	telegramHandler := handlers.NewTelegramHandler(telegramService, cfg.Telegram.BotSecret)
+	telegramHandler := handlers.NewTelegramHandler(telegramService, supportService, cfg.Telegram.BotSecret)
 	paymentWebhookHandler := handlers.NewPaymentWebhookHandler(telegramService)
 	containerRepository := containers.NewRepository(deps.DB)
 	containerService := containers.NewService(containerRepository, deps.Incus)
@@ -57,6 +61,8 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	telegramRoutes.POST("/buy-vps", telegramHandler.BuyVPS)
 	telegramRoutes.POST("/buy-vps/submit", telegramHandler.BuyVPSSubmit)
 	telegramRoutes.POST("/buy-vps/status", telegramHandler.BuyVPSStatus)
+	telegramRoutes.POST("/wallet/topup/submit", telegramHandler.WalletTopupSubmit)
+	telegramRoutes.POST("/wallet/topup/status", telegramHandler.WalletTopupStatus)
 	telegramRoutes.POST("/my-vps", telegramHandler.MyVPS)
 	telegramRoutes.POST("/my-vps/detail", telegramHandler.MyVPSDetail)
 	telegramRoutes.POST("/my-vps/start", telegramHandler.StartAction)
@@ -80,6 +86,10 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	telegramRoutes.POST("/my-vps/transfer/submit", telegramHandler.TransferSubmit)
 	telegramRoutes.POST("/my-vps/cancel/preview", telegramHandler.CancelPreview)
 	telegramRoutes.POST("/my-vps/cancel/submit", telegramHandler.CancelSubmit)
+	telegramRoutes.POST("/support/create", telegramHandler.SupportCreate)
+	telegramRoutes.POST("/support/list", telegramHandler.SupportList)
+	telegramRoutes.POST("/support/detail", telegramHandler.SupportDetail)
+	telegramRoutes.POST("/support/reply", telegramHandler.SupportReply)
 
 	authRoutes := router.Group("/auth")
 	authRoutes.POST("/login", adminAuthHandler.Login)
@@ -109,6 +119,13 @@ func New(cfg config.Config, deps Dependencies) *gin.Engine {
 	containerRoutes.POST("/:id/actions/start", containerHandler.Start)
 	containerRoutes.POST("/:id/actions/stop", containerHandler.Stop)
 	containerRoutes.POST("/:id/actions/suspend", containerHandler.Suspend)
+
+	supportRoutes := router.Group("/support/tickets")
+	supportRoutes.Use(adminAuthMiddleware.Require())
+	supportRoutes.GET("", supportHandler.List)
+	supportRoutes.GET("/:id", supportHandler.GetByID)
+	supportRoutes.POST("/:id/messages", supportHandler.Reply)
+	supportRoutes.PATCH("/:id/status", supportHandler.UpdateStatus)
 
 	paymentRoutes := router.Group("/payments")
 	paymentRoutes.POST("/pakasir/webhook", paymentWebhookHandler.Pakasir)

@@ -60,6 +60,39 @@ func (r *Repository) FindPurchaseOrderByID(ctx context.Context, orderID string) 
 	return &order, nil
 }
 
+func (r *Repository) FindWalletTopupForUser(ctx context.Context, telegramID int64, topupID string) (*model.WalletTopup, error) {
+	var topup model.WalletTopup
+	err := r.db.WithContext(ctx).
+		Model(&model.WalletTopup{}).
+		Joins("JOIN users ON users.id = wallet_topups.user_id").
+		Where("users.telegram_id = ? AND wallet_topups.id = ?", telegramID, topupID).
+		Preload("User").
+		Preload("User.Wallet").
+		Preload("Payments").
+		First(&topup).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return &topup, nil
+}
+
+func (r *Repository) FindWalletTopupByID(ctx context.Context, topupID string) (*model.WalletTopup, error) {
+	var topup model.WalletTopup
+	err := r.db.WithContext(ctx).
+		Model(&model.WalletTopup{}).
+		Where("wallet_topups.id = ?", topupID).
+		Preload("User").
+		Preload("User.Wallet").
+		Preload("Payments").
+		First(&topup).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return &topup, nil
+}
+
 func (r *Repository) HasHostnameConflict(ctx context.Context, hostname string) (bool, error) {
 	normalized := strings.ToLower(strings.TrimSpace(hostname))
 

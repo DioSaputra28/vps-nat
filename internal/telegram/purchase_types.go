@@ -36,6 +36,33 @@ type BuyVPSStatusResult struct {
 	Error   *string               `json:"error,omitempty"`
 }
 
+type WalletTopupSubmitInput struct {
+	TelegramID int64
+	Amount     int64
+}
+
+type WalletTopupSubmitResult struct {
+	TopupID   string                `json:"topup_id"`
+	PaymentID string                `json:"payment_id"`
+	Status    string                `json:"status"`
+	Payment   *BuyVPSPaymentPayload `json:"payment,omitempty"`
+}
+
+type WalletTopupStatusInput struct {
+	TelegramID int64
+	TopupID    string
+}
+
+type WalletTopupStatusResult struct {
+	TopupID string                `json:"topup_id"`
+	Status  string                `json:"status"`
+	Amount  int64                 `json:"amount"`
+	Balance *int64                `json:"balance,omitempty"`
+	Payment *BuyVPSPaymentPayload `json:"payment,omitempty"`
+	PaidAt  *time.Time            `json:"paid_at,omitempty"`
+	Error   *string               `json:"error,omitempty"`
+}
+
 type BuyVPSServicePayload struct {
 	OrderID      string                     `json:"order_id"`
 	ServiceID    string                     `json:"service_id"`

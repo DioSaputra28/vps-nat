@@ -294,6 +294,151 @@ func TestBuyVPSStatusReturnsActiveAccessPayload(t *testing.T) {
 	}
 }
 
+func TestWalletTopupSubmitCreatesPendingTopupAndPayment(t *testing.T) {
+	t.Parallel()
+
+	svc, db := newPurchaseServiceTestHarness(t)
+	svc.paymentGateway = fakePurchasePaymentGateway{
+		createQrisFn: func(_ context.Context, req PakasirCreateTransactionRequest) (*PakasirTransaction, error) {
+			expiredAt := time.Now().UTC().Add(30 * time.Minute)
+			return &PakasirTransaction{
+				Provider:     "pakasir",
+				OrderID:      req.OrderID,
+				Amount:       req.Amount,
+				Fee:          500,
+				TotalPayment: req.Amount + 500,
+				QRString:     "TOPUP-QR",
+				ExpiredAt:    expiredAt,
+				Raw:          map[string]any{"payment_method": "qris"},
+			}, nil
+		},
+	}
+
+	seedPurchaseUser(t, db, 7101, "user-topup-1", "wallet-topup-1", 0)
+
+	result, err := svc.WalletTopupSubmit(context.Background(), WalletTopupSubmitInput{
+		TelegramID: 7101,
+		Amount:     20000,
+	})
+	if err != nil {
+		t.Fatalf("WalletTopupSubmit returned error: %v", err)
+	}
+
+	if result.Status != "awaiting_payment" {
+		t.Fatalf("expected awaiting_payment, got %s", result.Status)
+	}
+	if result.Payment == nil || result.Payment.QRString != "TOPUP-QR" {
+		t.Fatalf("expected QR payment payload, got %#v", result.Payment)
+	}
+
+	var topup model.WalletTopup
+	if err := db.First(&topup, "id = ?", result.TopupID).Error; err != nil {
+		t.Fatalf("failed to load wallet topup: %v", err)
+	}
+	if topup.Status != "pending" || topup.Amount != 20000 {
+		t.Fatalf("unexpected topup state: %#v", topup)
+	}
+
+	var payment model.Payment
+	if err := db.First(&payment, "id = ?", result.PaymentID).Error; err != nil {
+		t.Fatalf("failed to load payment: %v", err)
+	}
+	if payment.Purpose != "wallet_topup" || payment.Status != "pending" {
+		t.Fatalf("unexpected payment state: %#v", payment)
+	}
+}
+
+func TestWalletTopupStatusReturnsPendingPayment(t *testing.T) {
+	t.Parallel()
+
+	svc, db := newPurchaseServiceTestHarness(t)
+	seedPurchaseUser(t, db, 7102, "user-topup-2", "wallet-topup-2", 0)
+	topupID, _ := seedPendingWalletTopup(t, db, pendingWalletTopupSeedInput{
+		userID: "user-topup-2",
+		amount: 15000,
+	})
+
+	result, err := svc.WalletTopupStatus(context.Background(), WalletTopupStatusInput{
+		TelegramID: 7102,
+		TopupID:    topupID,
+	})
+	if err != nil {
+		t.Fatalf("WalletTopupStatus returned error: %v", err)
+	}
+
+	if result.Status != "awaiting_payment" {
+		t.Fatalf("expected awaiting_payment, got %s", result.Status)
+	}
+	if result.Payment == nil || result.Payment.Amount != 15000 {
+		t.Fatalf("unexpected payment payload: %#v", result.Payment)
+	}
+}
+
+func TestHandlePakasirWebhookCreditsWalletForTopup(t *testing.T) {
+	t.Parallel()
+
+	svc, db := newPurchaseServiceTestHarness(t)
+	svc.paymentGateway = fakePurchasePaymentGateway{
+		verifyQrisFn: func(_ context.Context, req PakasirVerifyTransactionRequest) (*PakasirVerifiedTransaction, error) {
+			return &PakasirVerifiedTransaction{
+				OrderID:       req.OrderID,
+				Amount:        req.Amount,
+				Status:        "completed",
+				PaymentMethod: "qris",
+				CompletedAt:   time.Now().UTC(),
+			}, nil
+		},
+	}
+	seedPurchaseUser(t, db, 7103, "user-topup-3", "wallet-topup-3", 1000)
+	topupID, paymentID := seedPendingWalletTopup(t, db, pendingWalletTopupSeedInput{
+		userID: "user-topup-3",
+		amount: 25000,
+	})
+
+	err := svc.HandlePakasirWebhook(context.Background(), PakasirWebhookInput{
+		Amount:        25000,
+		OrderID:       topupID,
+		Project:       "project-slug",
+		Status:        "completed",
+		PaymentMethod: "qris",
+	})
+	if err != nil {
+		t.Fatalf("HandlePakasirWebhook returned error: %v", err)
+	}
+
+	var wallet model.Wallet
+	if err := db.First(&wallet, "id = ?", "wallet-topup-3").Error; err != nil {
+		t.Fatalf("failed to load wallet: %v", err)
+	}
+	if wallet.Balance != 26000 {
+		t.Fatalf("expected wallet balance 26000, got %d", wallet.Balance)
+	}
+
+	var topup model.WalletTopup
+	if err := db.First(&topup, "id = ?", topupID).Error; err != nil {
+		t.Fatalf("failed to load topup: %v", err)
+	}
+	if topup.Status != "paid" {
+		t.Fatalf("expected topup paid, got %s", topup.Status)
+	}
+
+	var payment model.Payment
+	if err := db.First(&payment, "id = ?", paymentID).Error; err != nil {
+		t.Fatalf("failed to load payment: %v", err)
+	}
+	if payment.Status != "paid" {
+		t.Fatalf("expected payment paid, got %s", payment.Status)
+	}
+
+	var txCount int64
+	if err := db.Model(&model.WalletTransaction{}).Where("source_type = ? AND source_id = ?", "wallet_topup", topupID).Count(&txCount).Error; err != nil {
+		t.Fatalf("failed to count wallet transactions: %v", err)
+	}
+	if txCount != 1 {
+		t.Fatalf("expected 1 wallet topup transaction, got %d", txCount)
+	}
+}
+
 type fakePurchaseProvisioner struct {
 	hostnameExistsFn func(ctx context.Context, hostname string) (bool, error)
 	provisionFn      func(ctx context.Context, req PurchaseProvisionRequest) (*PurchaseProvisionResult, error)
@@ -355,6 +500,7 @@ func newPurchaseServiceTestHarness(t *testing.T) (*Service, *gorm.DB) {
 	if err := db.AutoMigrate(
 		&model.User{},
 		&model.Wallet{},
+		&model.WalletTopup{},
 		&model.Package{},
 		&model.Order{},
 		&model.Payment{},
@@ -373,6 +519,50 @@ func newPurchaseServiceTestHarness(t *testing.T) (*Service, *gorm.DB) {
 	svc := NewService(repo, nil)
 	svc.adminNotifier = fakeAdminNotifier{}
 	return svc, db
+}
+
+type pendingWalletTopupSeedInput struct {
+	userID string
+	amount int64
+}
+
+func seedPendingWalletTopup(t *testing.T, db *gorm.DB, input pendingWalletTopupSeedInput) (string, string) {
+	t.Helper()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	topup := model.WalletTopup{
+		ID:          "topup-pending-1",
+		UserID:      input.userID,
+		Status:      "pending",
+		Amount:      input.amount,
+		RequestedAt: now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	payment := model.Payment{
+		ID:            "payment-topup-1",
+		WalletTopupID: &topup.ID,
+		Purpose:       "wallet_topup",
+		Method:        "qris",
+		Provider:      stringPtr("pakasir"),
+		ProviderRef:   &topup.ID,
+		ProviderPayload: map[string]any{
+			"fee":           int64(500),
+			"total_payment": input.amount + 500,
+			"qr_string":     "TOPUP-QR",
+		},
+		Amount:    input.amount,
+		Status:    "pending",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := db.Create(&topup).Error; err != nil {
+		t.Fatalf("failed to create topup: %v", err)
+	}
+	if err := db.Create(&payment).Error; err != nil {
+		t.Fatalf("failed to create topup payment: %v", err)
+	}
+	return topup.ID, payment.ID
 }
 
 func seedPurchaseUser(t *testing.T, db *gorm.DB, telegramID int64, userID string, walletID string, balance int64) {

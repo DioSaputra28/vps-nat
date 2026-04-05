@@ -32,6 +32,7 @@ var (
 	ErrPackageNotFound          = errors.New("package not found")
 	ErrHostnameAlreadyExists    = errors.New("hostname already exists")
 	ErrOrderNotFound            = errors.New("order not found")
+	ErrWalletTopupNotFound      = errors.New("wallet topup not found")
 	ErrProvisioningFailed       = errors.New("provisioning failed")
 	ErrPaymentVerification      = errors.New("payment verification failed")
 	ErrActiveNodeNotFound       = errors.New("active node not found")

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/DioSaputra28/vps-nat/internal/http/response"
+	"github.com/DioSaputra28/vps-nat/internal/support"
 	"github.com/DioSaputra28/vps-nat/internal/telegram"
 	"github.com/gin-gonic/gin"
 )
@@ -12,8 +13,9 @@ import (
 const telegramBotSecretHeader = "X-Telegram-Bot-Secret"
 
 type TelegramHandler struct {
-	service   *telegram.Service
-	botSecret string
+	service        *telegram.Service
+	supportService *support.Service
+	botSecret      string
 }
 
 type telegramStartRequest struct {
@@ -41,10 +43,11 @@ type telegramMyVPSDetailRequest struct {
 	ContainerID string `json:"container_id" binding:"required"`
 }
 
-func NewTelegramHandler(service *telegram.Service, botSecret string) TelegramHandler {
+func NewTelegramHandler(service *telegram.Service, supportService *support.Service, botSecret string) TelegramHandler {
 	return TelegramHandler{
-		service:   service,
-		botSecret: botSecret,
+		service:        service,
+		supportService: supportService,
+		botSecret:      botSecret,
 	}
 }
 
